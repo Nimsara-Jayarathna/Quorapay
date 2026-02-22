@@ -45,6 +45,9 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 
 ## Collaboration Workflow
 
-- Work is split by feature branches aligned to core system concerns.
-- Members open focused pull requests into `main`; no direct commits to `main`.
+- Work is split by dedicated feature branches aligned to core system concerns.
+- `dev` is the shared integration branch used during active development.
+- `main` is the production-level, finalized branch and stays stable.
+- Merge flow is `feature/*` -> `dev` -> `main`, with pull requests at each stage.
+- No direct commits to `main`.
 - Shared architecture and protocol decisions are documented under `docs/` and reviewed in PRs.

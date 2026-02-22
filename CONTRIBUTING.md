@@ -4,7 +4,8 @@
 
 Use the following branch names:
 
-- `main` (stable, submission-ready)
+- `main` (production-level, finalized, submission-ready)
+- `dev` (active development and integration branch)
 - `feature/fault-tolerance`
 - `feature/replication-consistency`
 - `feature/time-sync-ordering`
@@ -17,9 +18,11 @@ Optional integration branch:
 ## Pull Request Rules
 
 - No direct commits to `main`.
+- No direct commits to `dev`; merge via pull request review.
 - Each member works in their assigned feature branch and opens pull requests.
 - Keep pull requests small, focused, and scoped to one concern.
 - Link documentation updates to implementation changes in the same PR.
+- Merge flow: `feature/*` -> `dev` during implementation, then `dev` -> `main` when production-ready.
 
 ## Commit Message Style
 
