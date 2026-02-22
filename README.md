@@ -51,3 +51,20 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 - Merge flow is `feature/*` -> `dev` -> `main`, with pull requests at each stage.
 - No direct commits to `main`.
 - Shared architecture and protocol decisions are documented under `docs/` and reviewed in PRs.
+
+## Web Client (React)
+
+Run the demo web client from `client/web`:
+
+```bash
+cd client/web
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Build command:
+
+```bash
+npm run build
+```
