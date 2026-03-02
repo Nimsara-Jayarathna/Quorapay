@@ -17,6 +17,7 @@ type Config struct {
 	CORSAllowed string
 	ZKAddr      string
 	StoragePath string
+	RequestShutdown func(reason string)
 }
 
 type StatusSource interface {
@@ -44,6 +45,7 @@ func NewHandler(cfg Config, status StatusSource, ledger LedgerStore) http.Handle
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/status", h.statusHandler)
 	mux.HandleFunc("/ledger", h.ledgerHandler)
+	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
 }
 
@@ -81,6 +83,28 @@ func (h *handler) ledgerHandler(w http.ResponseWriter, r *http.Request) {
 		Count: len(items),
 		Items: items,
 	})
+}
+
+func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	if h.cfg.RequestShutdown == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "shutdown is not configured"})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"message": "shutdown scheduled",
+		"node_id": h.cfg.NodeID,
+	})
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		h.cfg.RequestShutdown("requested by /admin/shutdown")
+	}()
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

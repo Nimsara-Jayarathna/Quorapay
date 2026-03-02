@@ -92,6 +92,14 @@ curl http://localhost:8002/status
 curl http://localhost:8003/status
 ```
 
+You can also terminate a specific node directly through the node API or the web client:
+
+```bash
+curl -X POST http://localhost:8002/admin/shutdown
+```
+
+This local-only admin endpoint is intended for failover drills so you can verify that leader election updates correctly when an individual node exits.
+
 6. Stop background node processes when finished:
 
 ```bash

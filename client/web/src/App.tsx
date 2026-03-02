@@ -40,6 +40,11 @@ type LedgerResponse = {
   items: LedgerItem[];
 };
 
+type ShutdownResponse = {
+  message: string;
+  node_id?: string;
+};
+
 type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";
 
 const nodeUrls = (import.meta.env.VITE_NODE_URLS as string | undefined)
@@ -140,6 +145,8 @@ function App() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [shutdownLoading, setShutdownLoading] = useState(false);
+  const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
 
   const filteredLedgerItems = useMemo(() => {
     if (statusFilter === "ALL") {
@@ -236,6 +243,37 @@ function App() {
     }
   }
 
+  async function handleShutdownSelectedNode() {
+    if (!selectedNodeUrl) {
+      setShutdownMessage("No node URL configured. Check VITE_NODE_URLS.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Terminate the selected node at ${selectedNodeUrl}? This is a local demo action and will stop that node process.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setShutdownLoading(true);
+    setShutdownMessage(null);
+
+    try {
+      const result = await fetchJson<ShutdownResponse>(`${selectedNodeUrl}/admin/shutdown`, {
+        method: "POST",
+      });
+      setShutdownMessage(result.message || "Shutdown scheduled.");
+      window.setTimeout(() => {
+        void refreshStatus();
+      }, 600);
+    } catch (error) {
+      setShutdownMessage(getErrorMessage(error));
+    } finally {
+      setShutdownLoading(false);
+    }
+  }
+
   useEffect(() => {
     void refreshStatus();
     void refreshLedger();
@@ -262,15 +300,31 @@ function App() {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-medium text-slate-900">Node Selector + Status</h2>
-            <button
-              type="button"
-              onClick={() => void refreshStatus()}
-              disabled={statusLoading}
-              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {statusLoading ? "Refreshing..." : "Refresh Status"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void refreshStatus()}
+                disabled={statusLoading}
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {statusLoading ? "Refreshing..." : "Refresh Status"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleShutdownSelectedNode()}
+                disabled={shutdownLoading || !selectedNodeUrl}
+                className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {shutdownLoading ? "Stopping..." : "Terminate Selected Node"}
+              </button>
+            </div>
           </div>
+
+          {shutdownMessage ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {shutdownMessage}
+            </div>
+          ) : null}
 
           <div className="mb-4 grid gap-3 sm:grid-cols-[220px_1fr] sm:items-center">
             <label htmlFor="node-select" className="text-sm font-medium text-slate-700">

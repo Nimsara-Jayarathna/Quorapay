@@ -47,6 +47,7 @@ npm run preview
 ## Features
 - Node selector populated from environment URLs.
 - Node status fetch from `GET /status`.
+- Local-only node termination via `POST /admin/shutdown` for failover testing.
 - Payment submission to `POST /pay` with generated UUID support.
 - Ledger viewer from `GET /ledger` with status filter.
 - Clear unreachable-node and API error states.
@@ -54,3 +55,4 @@ npm run preview
 ## Notes
 - This project does not mock backend behavior.
 - Endpoints are called directly against running Quorapay node services.
+- In the current baseline milestone, `/status`, `/ledger`, and `/admin/shutdown` are available. `POST /pay` is still a future milestone and will return an error until payment processing is implemented.
