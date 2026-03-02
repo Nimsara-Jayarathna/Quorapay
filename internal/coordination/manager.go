@@ -3,8 +3,6 @@ package coordination
 import (
 	"errors"
 	"log"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,17 +24,6 @@ type Config struct {
 	Logger      *log.Logger
 }
 
-type Status struct {
-	NodeID      string `json:"node_id"`
-	Role        string `json:"role"`
-	LeaderID    string `json:"leader_id"`
-	LeaderURL   string `json:"leader_url"`
-	ZKAddr      string `json:"zk_addr"`
-	StoragePath string `json:"storage_path"`
-	ZKError     string `json:"zk_error,omitempty"`
-	Timestamp   string `json:"timestamp"`
-}
-
 type Manager struct {
 	cfg Config
 
@@ -47,9 +34,12 @@ type Manager struct {
 	doneCh  chan struct{}
 	closeMu sync.Once
 
-	mu            sync.RWMutex
-	status        Status
-	candidatePath string
+	mu             sync.RWMutex
+	status         Status
+	candidatePath  string
+	eligibleSince  time.Time
+	lastLoopStart  time.Time
+	lastKnownLease leaderLease
 }
 
 func NewManager(cfg Config) *Manager {
@@ -85,7 +75,7 @@ func (m *Manager) Start() error {
 	m.started = true
 
 	go m.consumeSessionEvents()
-	go m.watchElection()
+	go m.watchCoordination()
 
 	return nil
 }
@@ -132,6 +122,7 @@ func (m *Manager) consumeSessionEvents() {
 			case zk.StateExpired:
 				m.mu.Lock()
 				m.candidatePath = ""
+				m.eligibleSince = time.Time{}
 				m.mu.Unlock()
 				m.setZKError(errors.New("zookeeper session expired"))
 			case zk.StateAuthFailed:
@@ -141,7 +132,7 @@ func (m *Manager) consumeSessionEvents() {
 	}
 }
 
-func (m *Manager) watchElection() {
+func (m *Manager) watchCoordination() {
 	for {
 		select {
 		case <-m.stopCh:
@@ -149,58 +140,50 @@ func (m *Manager) watchElection() {
 		default:
 		}
 
+		m.recordStatusRefreshTick()
+
 		if m.conn == nil {
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		if err := m.ensureRegistered(); err != nil {
+		if err := m.reconcile(); err != nil {
 			m.setZKError(err)
 			m.cfg.Logger.Printf("coordination reconcile failed: %v", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		if err := m.refreshLeader(); err != nil {
-			m.setZKError(err)
-			m.cfg.Logger.Printf("leader refresh failed: %v", err)
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		_, _, eventCh, err := m.conn.ChildrenW(m.electionPath())
-		if err != nil {
+		if err := m.waitForCoordinationChange(); err != nil && !errors.Is(err, zk.ErrClosing) {
 			m.setZKError(err)
 			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		select {
-		case <-m.stopCh:
-			return
-		case <-time.After(10 * time.Second):
-		case _, ok := <-eventCh:
-			if !ok {
-				time.Sleep(500 * time.Millisecond)
-			}
 		}
 	}
 }
 
-func (m *Manager) ensureRegistered() error {
-	if err := m.ensurePersistentPath(m.cfg.ZKRoot); err != nil {
+func (m *Manager) reconcile() error {
+	if err := m.ensureRegistered(); err != nil {
 		return err
 	}
-	if err := m.ensurePersistentPath(m.membersPath()); err != nil {
+
+	eligible, err := m.determineLeaderEligible()
+	if err != nil {
 		return err
 	}
-	if err := m.ensurePersistentPath(m.electionPath()); err != nil {
-		return err
+
+	if eligible {
+		if _, _, err := m.tryAcquireLeaderLease(); err != nil {
+			return err
+		}
+	} else {
+		m.clearEligibility()
 	}
-	if err := m.ensureMemberNode(); err != nil {
-		return err
-	}
-	if err := m.ensureCandidateNode(); err != nil {
+
+	if err := m.refreshStatusFromLease(); err != nil {
+		if errors.Is(err, zk.ErrNoNode) {
+			m.setNoLeaderStatus()
+			return nil
+		}
 		return err
 	}
 
@@ -208,150 +191,31 @@ func (m *Manager) ensureRegistered() error {
 	return nil
 }
 
-func (m *Manager) ensurePersistentPath(path string) error {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
+func (m *Manager) waitForCoordinationChange() error {
+	_, _, electionWatch, err := m.conn.ChildrenW(m.electionPath())
+	if err != nil {
+		return err
+	}
+
+	_, _, leaderWatch, err := m.conn.ExistsW(m.leaderPath())
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-m.stopCh:
+		return nil
+	case <-time.After(5 * time.Second):
+		return nil
+	case _, ok := <-electionWatch:
+		if !ok {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return nil
+	case _, ok := <-leaderWatch:
+		if !ok {
+			time.Sleep(200 * time.Millisecond)
+		}
 		return nil
 	}
-
-	current := ""
-	for _, part := range parts {
-		current += "/" + part
-		exists, _, err := m.conn.Exists(current)
-		if err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		_, err = m.conn.Create(current, nil, 0, zk.WorldACL(zk.PermAll))
-		if err != nil && !errors.Is(err, zk.ErrNodeExists) {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (m *Manager) ensureMemberNode() error {
-	memberPath := m.memberPath()
-	exists, _, err := m.conn.Exists(memberPath)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	_, err = m.conn.Create(memberPath, []byte(m.cfg.BaseURL), zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
-	if err != nil && !errors.Is(err, zk.ErrNodeExists) {
-		return err
-	}
-	return nil
-}
-
-func (m *Manager) ensureCandidateNode() error {
-	m.mu.RLock()
-	candidatePath := m.candidatePath
-	m.mu.RUnlock()
-
-	if candidatePath != "" {
-		exists, _, err := m.conn.Exists(candidatePath)
-		if err == nil && exists {
-			return nil
-		}
-	}
-
-	createdPath, err := m.conn.Create(m.electionPath()+"/candidate-", []byte(m.cfg.NodeID), zk.FlagEphemeral|zk.FlagSequence, zk.WorldACL(zk.PermAll))
-	if err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	m.candidatePath = createdPath
-	m.mu.Unlock()
-
-	return nil
-}
-
-func (m *Manager) refreshLeader() error {
-	children, _, err := m.conn.Children(m.electionPath())
-	if err != nil {
-		return err
-	}
-
-	candidates := make([]string, 0, len(children))
-	for _, child := range children {
-		if strings.HasPrefix(child, "candidate-") {
-			candidates = append(candidates, child)
-		}
-	}
-
-	sort.Strings(candidates)
-	if len(candidates) == 0 {
-		m.mu.Lock()
-		m.status.Role = RoleUnknown
-		m.status.LeaderID = ""
-		m.status.LeaderURL = ""
-		m.mu.Unlock()
-		return nil
-	}
-
-	leaderPath := m.electionPath() + "/" + candidates[0]
-	leaderData, _, err := m.conn.Get(leaderPath)
-	if err != nil {
-		return err
-	}
-
-	leaderID := string(leaderData)
-	leaderURL := ""
-	memberData, _, err := m.conn.Get(m.membersPath() + "/" + leaderID)
-	if err == nil {
-		leaderURL = string(memberData)
-	}
-
-	m.mu.RLock()
-	selfCandidate := m.candidatePath
-	m.mu.RUnlock()
-
-	role := RoleFollower
-	if selfCandidate != "" && strings.TrimPrefix(selfCandidate, m.electionPath()+"/") == candidates[0] {
-		role = RoleLeader
-	}
-
-	m.mu.Lock()
-	m.status.Role = role
-	m.status.LeaderID = leaderID
-	m.status.LeaderURL = leaderURL
-	m.mu.Unlock()
-
-	return nil
-}
-
-func (m *Manager) setZKError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.status.ZKError = err.Error()
-	m.status.Role = RoleUnknown
-	m.status.LeaderID = ""
-	m.status.LeaderURL = ""
-}
-
-func (m *Manager) clearZKError() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.status.ZKError = ""
-}
-
-func (m *Manager) membersPath() string {
-	return strings.TrimRight(m.cfg.ZKRoot, "/") + "/members"
-}
-
-func (m *Manager) memberPath() string {
-	return m.membersPath() + "/" + m.cfg.NodeID
-}
-
-func (m *Manager) electionPath() string {
-	return strings.TrimRight(m.cfg.ZKRoot, "/") + "/election"
 }
