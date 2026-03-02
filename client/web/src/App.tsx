@@ -1,51 +1,19 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type NodeStatus = {
-  node_id: string;
-  role: "LEADER" | "FOLLOWER" | string;
-  leader_id?: string;
-  leader_url?: string;
-  last_log_index?: number;
-  commit_index?: number;
-};
-
-type PaymentRequest = {
-  payment_id: string;
-  amount: number;
-  currency: string;
-  note?: string;
-};
-
-type PaymentResponse = {
-  payment_id: string;
-  accepted: boolean;
-  status: "PENDING" | "COMMITTED" | "FAILED" | string;
-  message: string;
-  leader_url?: string;
-  record?: Record<string, unknown>;
-};
-
-type LedgerItem = {
-  log_index: number;
-  payment_id: string;
-  amount: number;
-  currency: string;
-  status: "COMMITTED" | "FAILED" | "PENDING" | string;
-  created_at: string;
-  server_id?: string;
-};
-
-type LedgerResponse = {
-  count: number;
-  items: LedgerItem[];
-};
-
-type ShutdownResponse = {
-  message: string;
-  node_id?: string;
-};
-
-type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";
+import LedgerTable from "./components/LedgerTable";
+import NodeStatusPanel from "./components/NodeStatusPanel";
+import PaymentForm from "./components/PaymentForm";
+import ShutdownConfirmModal from "./components/ShutdownConfirmModal";
+import {
+  fetchJson,
+  getErrorMessage,
+  LedgerResponse,
+  NodeStatus,
+  PaymentRequest,
+  PaymentResponse,
+  ShutdownResponse,
+  StatusFilter,
+} from "./lib/api";
 
 const nodeUrls = (import.meta.env.VITE_NODE_URLS as string | undefined)
   ?.split(",")
@@ -58,65 +26,6 @@ const defaultNodeIndex =
     ? configuredDefaultIndex
     : 0;
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "Unexpected error";
-}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 8000);
-
-  const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  try {
-    const response = await fetch(url, {
-      ...init,
-      headers,
-      signal: controller.signal,
-    });
-
-    const raw = await response.text();
-    let payload: unknown = null;
-    if (raw) {
-      try {
-        payload = JSON.parse(raw) as unknown;
-      } catch {
-        payload = raw;
-      }
-    }
-
-    if (!response.ok) {
-      if (payload && typeof payload === "object" && "message" in payload) {
-        throw new Error(String((payload as { message?: unknown }).message ?? `HTTP ${response.status}`));
-      }
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    return payload as T;
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Request timed out");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
-
-function formatDate(isoDate: string): string {
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) {
-    return isoDate;
-  }
-  return date.toLocaleString();
-}
-
 function generatePaymentId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -126,7 +35,6 @@ function generatePaymentId(): string {
 
 function App() {
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
-
   const selectedNodeUrl = nodeUrls[selectedNodeIndex] ?? "";
 
   const [status, setStatus] = useState<NodeStatus | null>(null);
@@ -141,10 +49,11 @@ function App() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentResult, setPaymentResult] = useState<PaymentResponse | null>(null);
 
-  const [ledgerItems, setLedgerItems] = useState<LedgerItem[]>([]);
+  const [ledgerItems, setLedgerItems] = useState<LedgerResponse["items"]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+
   const [shutdownLoading, setShutdownLoading] = useState(false);
   const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
   const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
@@ -286,37 +195,13 @@ function App() {
 
   return (
     <div className="relative">
-      {showShutdownConfirm ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="mb-4">
-              <h2 className="text-lg font-semibold text-slate-900">Confirm Node Termination</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Terminate the selected node at <span className="font-medium text-slate-900">{selectedNodeUrl || "-"}</span>?
-                This local demo action stops that node process so you can verify failover and leader re-election.
-              </p>
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowShutdownConfirm(false)}
-                disabled={shutdownLoading}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmShutdownSelectedNode()}
-                disabled={shutdownLoading}
-                className="rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {shutdownLoading ? "Stopping..." : "Confirm Termination"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ShutdownConfirmModal
+        open={showShutdownConfirm}
+        nodeUrl={selectedNodeUrl}
+        loading={shutdownLoading}
+        onCancel={() => setShowShutdownConfirm(false)}
+        onConfirm={() => void confirmShutdownSelectedNode()}
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <header className="mb-6">
@@ -335,233 +220,42 @@ function App() {
         ) : null}
 
         <div className="space-y-6">
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-medium text-slate-900">Node Selector + Status</h2>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void refreshStatus()}
-                  disabled={statusLoading}
-                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {statusLoading ? "Refreshing..." : "Refresh Status"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleShutdownSelectedNode}
-                  disabled={shutdownLoading || !selectedNodeUrl}
-                  className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {shutdownLoading ? "Stopping..." : "Terminate Selected Node"}
-                </button>
-              </div>
-            </div>
+          <NodeStatusPanel
+            nodeUrls={nodeUrls}
+            selectedNodeIndex={selectedNodeIndex}
+            onSelectNode={setSelectedNodeIndex}
+            status={status}
+            statusLoading={statusLoading}
+            shutdownLoading={shutdownLoading}
+            shutdownMessage={shutdownMessage}
+            onRefreshStatus={() => void refreshStatus()}
+            onRequestTerminate={handleShutdownSelectedNode}
+          />
 
-            {shutdownMessage ? (
-              <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                {shutdownMessage}
-              </div>
-            ) : null}
+          <PaymentForm
+            paymentId={paymentId}
+            amount={amount}
+            currency={currency}
+            note={note}
+            paymentLoading={paymentLoading}
+            paymentError={paymentError}
+            paymentResult={paymentResult}
+            onPaymentIdChange={setPaymentId}
+            onAmountChange={setAmount}
+            onCurrencyChange={setCurrency}
+            onNoteChange={setNote}
+            onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
+            onSubmit={handleSubmitPayment}
+          />
 
-            <div className="mb-4 grid gap-3 sm:grid-cols-[220px_1fr] sm:items-center">
-              <label htmlFor="node-select" className="text-sm font-medium text-slate-700">
-                Active node
-              </label>
-              <select
-                id="node-select"
-                value={selectedNodeIndex}
-                onChange={(event) => setSelectedNodeIndex(Number(event.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-              >
-                {nodeUrls.map((url, index) => (
-                  <option key={url} value={index}>
-                    {`Node ${String.fromCharCode(65 + index)} - ${url}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="overflow-hidden rounded-md border border-slate-200">
-              <dl className="grid grid-cols-1 divide-y divide-slate-200 text-sm sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">node_id</dt>
-                  <dd className="mt-1 text-slate-900">{status?.node_id ?? "-"}</dd>
-                </div>
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">role</dt>
-                  <dd className="mt-1 text-slate-900">{status?.role ?? "-"}</dd>
-                </div>
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">leader_id</dt>
-                  <dd className="mt-1 text-slate-900">{status?.leader_id ?? "-"}</dd>
-                </div>
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">leader_url</dt>
-                  <dd className="mt-1 break-all text-slate-900">{status?.leader_url ?? "-"}</dd>
-                </div>
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">last_log_index</dt>
-                  <dd className="mt-1 text-slate-900">{status?.last_log_index ?? "-"}</dd>
-                </div>
-                <div className="p-3">
-                  <dt className="font-medium text-slate-500">commit_index</dt>
-                  <dd className="mt-1 text-slate-900">{status?.commit_index ?? "-"}</dd>
-                </div>
-              </dl>
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-lg font-medium text-slate-900">Create Payment</h2>
-            <form className="grid gap-4" onSubmit={handleSubmitPayment}>
-              <div className="grid gap-2">
-                <label htmlFor="payment-id" className="text-sm font-medium text-slate-700">
-                  payment_id
-                </label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <input
-                    id="payment-id"
-                    value={paymentId}
-                    onChange={(event) => setPaymentId(event.target.value)}
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                    placeholder="Unique idempotency key"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setPaymentId(generatePaymentId())}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Generate payment_id
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-2">
-                  <label htmlFor="amount" className="text-sm font-medium text-slate-700">
-                    amount
-                  </label>
-                  <input
-                    id="amount"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={amount}
-                    onChange={(event) => setAmount(event.target.value)}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label htmlFor="currency" className="text-sm font-medium text-slate-700">
-                    currency
-                  </label>
-                  <input
-                    id="currency"
-                    value={currency}
-                    onChange={(event) => setCurrency(event.target.value)}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-400 focus:outline-none"
-                    placeholder="USD"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <label htmlFor="note" className="text-sm font-medium text-slate-700">
-                  note (optional)
-                </label>
-                <input
-                  id="note"
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                  placeholder="Optional note"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="submit"
-                  disabled={paymentLoading}
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {paymentLoading ? "Submitting..." : "Submit Payment"}
-                </button>
-                {paymentError ? <span className="text-sm text-red-700">{paymentError}</span> : null}
-                {paymentResult ? <span className="text-sm text-slate-600">{`${paymentResult.status}: ${paymentResult.message}`}</span> : null}
-              </div>
-            </form>
-
-            <div className="mt-4">
-              <h3 className="text-sm font-medium text-slate-700">Response</h3>
-              <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-900 p-3 font-mono text-xs text-slate-100">
-                {paymentResult ? JSON.stringify(paymentResult, null, 2) : "No response yet."}
-              </pre>
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-medium text-slate-900">Ledger Viewer</h2>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                >
-                  <option value="ALL">All</option>
-                  <option value="COMMITTED">Committed</option>
-                  <option value="FAILED">Failed</option>
-                  <option value="PENDING">Pending</option>
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void refreshLedger()}
-                  disabled={ledgerLoading}
-                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {ledgerLoading ? "Refreshing..." : "Refresh Ledger"}
-                </button>
-              </div>
-            </div>
-
-            {ledgerError ? <div className="mb-3 text-sm text-red-700">Ledger error: {ledgerError}</div> : null}
-
-            <div className="overflow-x-auto rounded-md border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredLedgerItems.length === 0 ? (
-                    <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={6}>
-                        No ledger entries to display.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredLedgerItems.map((item) => (
-                      <tr key={`${item.log_index}-${item.payment_id}`}>
-                        <td className="px-3 py-2 text-slate-700">{item.log_index}</td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
-                        <td className="px-3 py-2 text-slate-700">{item.amount}</td>
-                        <td className="px-3 py-2 text-slate-700">{item.currency}</td>
-                        <td className="px-3 py-2 text-slate-700">{item.status}</td>
-                        <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <LedgerTable
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            ledgerLoading={ledgerLoading}
+            ledgerError={ledgerError}
+            items={filteredLedgerItems}
+            onRefreshLedger={() => void refreshLedger()}
+          />
         </div>
       </div>
     </div>
