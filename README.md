@@ -73,7 +73,7 @@ curl http://localhost:8002/status
 curl http://localhost:8003/status
 ```
 
-One node should report `"role":"LEADER"` and the others should report `"role":"FOLLOWER"`.
+One node should report `"role":"LEADER"` and the others should report `"role":"FOLLOWER"`. The status payload now also includes agreement metadata such as `term`, `log_head`, `election_count`, and `last_election_ms`.
 
 4. Verify each node can read its local ledger (empty for the baseline):
 
