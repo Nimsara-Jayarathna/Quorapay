@@ -147,6 +147,7 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [shutdownLoading, setShutdownLoading] = useState(false);
   const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
+  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
 
   const filteredLedgerItems = useMemo(() => {
     if (statusFilter === "ALL") {
@@ -243,16 +244,19 @@ function App() {
     }
   }
 
-  async function handleShutdownSelectedNode() {
+  function handleShutdownSelectedNode() {
     if (!selectedNodeUrl) {
       setShutdownMessage("No node URL configured. Check VITE_NODE_URLS.");
       return;
     }
 
-    const confirmed = window.confirm(
-      `Terminate the selected node at ${selectedNodeUrl}? This is a local demo action and will stop that node process.`,
-    );
-    if (!confirmed) {
+    setShowShutdownConfirm(true);
+  }
+
+  async function confirmShutdownSelectedNode() {
+    if (!selectedNodeUrl) {
+      setShutdownMessage("No node URL configured. Check VITE_NODE_URLS.");
+      setShowShutdownConfirm(false);
       return;
     }
 
@@ -271,6 +275,7 @@ function App() {
       setShutdownMessage(getErrorMessage(error));
     } finally {
       setShutdownLoading(false);
+      setShowShutdownConfirm(false);
     }
   }
 
@@ -280,250 +285,284 @@ function App() {
   }, [refreshStatus, refreshLedger]);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Quorapay Web Client</h1>
-        <p className="mt-1 text-sm text-slate-600">Submit payments, inspect node status, and view replicated ledger data.</p>
-      </header>
-
-      {nodeUrls.length === 0 ? (
-        <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          No nodes configured. Add `VITE_NODE_URLS` in `.env` based on `.env.example`.
+    <div className="relative">
+      {showShutdownConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-slate-900">Confirm Node Termination</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Terminate the selected node at <span className="font-medium text-slate-900">{selectedNodeUrl || "-"}</span>?
+                This local demo action stops that node process so you can verify failover and leader re-election.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowShutdownConfirm(false)}
+                disabled={shutdownLoading}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmShutdownSelectedNode()}
+                disabled={shutdownLoading}
+                className="rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {shutdownLoading ? "Stopping..." : "Confirm Termination"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
-      {statusError ? (
-        <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div>
-      ) : null}
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <header className="mb-6">
+          <h1 className="text-2xl font-semibold text-slate-900">Quorapay Web Client</h1>
+          <p className="mt-1 text-sm text-slate-600">Submit payments, inspect node status, and view replicated ledger data.</p>
+        </header>
 
-      <div className="space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium text-slate-900">Node Selector + Status</h2>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void refreshStatus()}
-                disabled={statusLoading}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {statusLoading ? "Refreshing..." : "Refresh Status"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleShutdownSelectedNode()}
-                disabled={shutdownLoading || !selectedNodeUrl}
-                className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {shutdownLoading ? "Stopping..." : "Terminate Selected Node"}
-              </button>
-            </div>
+        {nodeUrls.length === 0 ? (
+          <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            No nodes configured. Add `VITE_NODE_URLS` in `.env` based on `.env.example`.
           </div>
+        ) : null}
 
-          {shutdownMessage ? (
-            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              {shutdownMessage}
-            </div>
-          ) : null}
+        {statusError ? (
+          <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div>
+        ) : null}
 
-          <div className="mb-4 grid gap-3 sm:grid-cols-[220px_1fr] sm:items-center">
-            <label htmlFor="node-select" className="text-sm font-medium text-slate-700">
-              Active node
-            </label>
-            <select
-              id="node-select"
-              value={selectedNodeIndex}
-              onChange={(event) => setSelectedNodeIndex(Number(event.target.value))}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-            >
-              {nodeUrls.map((url, index) => (
-                <option key={url} value={index}>
-                  {`Node ${String.fromCharCode(65 + index)} - ${url}`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="overflow-hidden rounded-md border border-slate-200">
-            <dl className="grid grid-cols-1 divide-y divide-slate-200 text-sm sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">node_id</dt>
-                <dd className="mt-1 text-slate-900">{status?.node_id ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">role</dt>
-                <dd className="mt-1 text-slate-900">{status?.role ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">leader_id</dt>
-                <dd className="mt-1 text-slate-900">{status?.leader_id ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">leader_url</dt>
-                <dd className="mt-1 break-all text-slate-900">{status?.leader_url ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">last_log_index</dt>
-                <dd className="mt-1 text-slate-900">{status?.last_log_index ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">commit_index</dt>
-                <dd className="mt-1 text-slate-900">{status?.commit_index ?? "-"}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-medium text-slate-900">Create Payment</h2>
-          <form className="grid gap-4" onSubmit={handleSubmitPayment}>
-            <div className="grid gap-2">
-              <label htmlFor="payment-id" className="text-sm font-medium text-slate-700">
-                payment_id
-              </label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  id="payment-id"
-                  value={paymentId}
-                  onChange={(event) => setPaymentId(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                  placeholder="Unique idempotency key"
-                />
+        <div className="space-y-6">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-medium text-slate-900">Node Selector + Status</h2>
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => setPaymentId(generatePaymentId())}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  onClick={() => void refreshStatus()}
+                  disabled={statusLoading}
+                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Generate payment_id
+                  {statusLoading ? "Refreshing..." : "Refresh Status"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShutdownSelectedNode}
+                  disabled={shutdownLoading || !selectedNodeUrl}
+                  className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {shutdownLoading ? "Stopping..." : "Terminate Selected Node"}
                 </button>
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <label htmlFor="amount" className="text-sm font-medium text-slate-700">
-                  amount
-                </label>
-                <input
-                  id="amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                />
+            {shutdownMessage ? (
+              <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {shutdownMessage}
               </div>
-              <div className="grid gap-2">
-                <label htmlFor="currency" className="text-sm font-medium text-slate-700">
-                  currency
-                </label>
-                <input
-                  id="currency"
-                  value={currency}
-                  onChange={(event) => setCurrency(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-400 focus:outline-none"
-                  placeholder="USD"
-                />
-              </div>
-            </div>
+            ) : null}
 
-            <div className="grid gap-2">
-              <label htmlFor="note" className="text-sm font-medium text-slate-700">
-                note (optional)
+            <div className="mb-4 grid gap-3 sm:grid-cols-[220px_1fr] sm:items-center">
+              <label htmlFor="node-select" className="text-sm font-medium text-slate-700">
+                Active node
               </label>
-              <input
-                id="note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                placeholder="Optional note"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="submit"
-                disabled={paymentLoading}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {paymentLoading ? "Submitting..." : "Submit Payment"}
-              </button>
-              {paymentError ? <span className="text-sm text-red-700">{paymentError}</span> : null}
-              {paymentResult ? <span className="text-sm text-slate-600">{`${paymentResult.status}: ${paymentResult.message}`}</span> : null}
-            </div>
-          </form>
-
-          <div className="mt-4">
-            <h3 className="text-sm font-medium text-slate-700">Response</h3>
-            <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-900 p-3 font-mono text-xs text-slate-100">
-              {paymentResult ? JSON.stringify(paymentResult, null, 2) : "No response yet."}
-            </pre>
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium text-slate-900">Ledger Viewer</h2>
-            <div className="flex flex-wrap items-center gap-2">
               <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                id="node-select"
+                value={selectedNodeIndex}
+                onChange={(event) => setSelectedNodeIndex(Number(event.target.value))}
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
               >
-                <option value="ALL">All</option>
-                <option value="COMMITTED">Committed</option>
-                <option value="FAILED">Failed</option>
-                <option value="PENDING">Pending</option>
+                {nodeUrls.map((url, index) => (
+                  <option key={url} value={index}>
+                    {`Node ${String.fromCharCode(65 + index)} - ${url}`}
+                  </option>
+                ))}
               </select>
-              <button
-                type="button"
-                onClick={() => void refreshLedger()}
-                disabled={ledgerLoading}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {ledgerLoading ? "Refreshing..." : "Refresh Ledger"}
-              </button>
             </div>
-          </div>
 
-          {ledgerError ? <div className="mb-3 text-sm text-red-700">Ledger error: {ledgerError}</div> : null}
+            <div className="overflow-hidden rounded-md border border-slate-200">
+              <dl className="grid grid-cols-1 divide-y divide-slate-200 text-sm sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">node_id</dt>
+                  <dd className="mt-1 text-slate-900">{status?.node_id ?? "-"}</dd>
+                </div>
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">role</dt>
+                  <dd className="mt-1 text-slate-900">{status?.role ?? "-"}</dd>
+                </div>
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">leader_id</dt>
+                  <dd className="mt-1 text-slate-900">{status?.leader_id ?? "-"}</dd>
+                </div>
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">leader_url</dt>
+                  <dd className="mt-1 break-all text-slate-900">{status?.leader_url ?? "-"}</dd>
+                </div>
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">last_log_index</dt>
+                  <dd className="mt-1 text-slate-900">{status?.last_log_index ?? "-"}</dd>
+                </div>
+                <div className="p-3">
+                  <dt className="font-medium text-slate-500">commit_index</dt>
+                  <dd className="mt-1 text-slate-900">{status?.commit_index ?? "-"}</dd>
+                </div>
+              </dl>
+            </div>
+          </section>
 
-          <div className="overflow-x-auto rounded-md border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredLedgerItems.length === 0 ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-lg font-medium text-slate-900">Create Payment</h2>
+            <form className="grid gap-4" onSubmit={handleSubmitPayment}>
+              <div className="grid gap-2">
+                <label htmlFor="payment-id" className="text-sm font-medium text-slate-700">
+                  payment_id
+                </label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    id="payment-id"
+                    value={paymentId}
+                    onChange={(event) => setPaymentId(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+                    placeholder="Unique idempotency key"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPaymentId(generatePaymentId())}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Generate payment_id
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <label htmlFor="amount" className="text-sm font-medium text-slate-700">
+                    amount
+                  </label>
+                  <input
+                    id="amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="currency" className="text-sm font-medium text-slate-700">
+                    currency
+                  </label>
+                  <input
+                    id="currency"
+                    value={currency}
+                    onChange={(event) => setCurrency(event.target.value)}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-400 focus:outline-none"
+                    placeholder="USD"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <label htmlFor="note" className="text-sm font-medium text-slate-700">
+                  note (optional)
+                </label>
+                <input
+                  id="note"
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+                  placeholder="Optional note"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={paymentLoading}
+                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {paymentLoading ? "Submitting..." : "Submit Payment"}
+                </button>
+                {paymentError ? <span className="text-sm text-red-700">{paymentError}</span> : null}
+                {paymentResult ? <span className="text-sm text-slate-600">{`${paymentResult.status}: ${paymentResult.message}`}</span> : null}
+              </div>
+            </form>
+
+            <div className="mt-4">
+              <h3 className="text-sm font-medium text-slate-700">Response</h3>
+              <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-900 p-3 font-mono text-xs text-slate-100">
+                {paymentResult ? JSON.stringify(paymentResult, null, 2) : "No response yet."}
+              </pre>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-medium text-slate-900">Ledger Viewer</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+                >
+                  <option value="ALL">All</option>
+                  <option value="COMMITTED">Committed</option>
+                  <option value="FAILED">Failed</option>
+                  <option value="PENDING">Pending</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void refreshLedger()}
+                  disabled={ledgerLoading}
+                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {ledgerLoading ? "Refreshing..." : "Refresh Ledger"}
+                </button>
+              </div>
+            </div>
+
+            {ledgerError ? <div className="mb-3 text-sm text-red-700">Ledger error: {ledgerError}</div> : null}
+
+            <div className="overflow-x-auto rounded-md border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
                   <tr>
-                    <td className="px-3 py-4 text-slate-500" colSpan={6}>
-                      No ledger entries to display.
-                    </td>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
                   </tr>
-                ) : (
-                  filteredLedgerItems.map((item) => (
-                    <tr key={`${item.log_index}-${item.payment_id}`}>
-                      <td className="px-3 py-2 text-slate-700">{item.log_index}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.amount}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.currency}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.status}</td>
-                      <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredLedgerItems.length === 0 ? (
+                    <tr>
+                      <td className="px-3 py-4 text-slate-500" colSpan={6}>
+                        No ledger entries to display.
+                      </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                  ) : (
+                    filteredLedgerItems.map((item) => (
+                      <tr key={`${item.log_index}-${item.payment_id}`}>
+                        <td className="px-3 py-2 text-slate-700">{item.log_index}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
+                        <td className="px-3 py-2 text-slate-700">{item.amount}</td>
+                        <td className="px-3 py-2 text-slate-700">{item.currency}</td>
+                        <td className="px-3 py-2 text-slate-700">{item.status}</td>
+                        <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
