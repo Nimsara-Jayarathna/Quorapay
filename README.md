@@ -108,6 +108,75 @@ This local-only admin endpoint is intended for failover drills so you can verify
 
 Runtime SQLite files are created under `./data/nodeA/ledger.db`, `./data/nodeB/ledger.db`, and `./data/nodeC/ledger.db`. The `data/` directory is intentionally ignored by git.
 
+## Node Operations
+
+The current baseline uses scripts for process lifecycle management. There is no separate restart service yet, so restart is done by stopping and starting nodes again.
+
+Start all nodes:
+
+```bash
+./scripts/run-nodes.sh
+```
+
+What it does:
+- Starts node A on `8001`
+- Starts node B on `8002`
+- Starts node C on `8003`
+- Reuses the root `.env` values for `ZK_ADDR`, `ZK_ROOT`, and `CORS_ALLOWED_ORIGINS`
+
+Stop all nodes:
+
+```bash
+./scripts/stop-nodes.sh
+```
+
+What it does:
+- Stops tracked background node processes
+- Also force-cleans any stale process still listening on `8001`, `8002`, or `8003`
+
+Kill the current leader only:
+
+```bash
+./scripts/kill-leader.sh
+```
+
+What it does:
+- Reads `/status` from the three nodes
+- Detects which node currently reports `LEADER`
+- Terminates only that leader process so you can observe re-election
+
+Terminate one specific node directly:
+
+```bash
+curl -X POST http://localhost:8001/admin/shutdown
+curl -X POST http://localhost:8002/admin/shutdown
+curl -X POST http://localhost:8003/admin/shutdown
+```
+
+What it does:
+- Gracefully shuts down only the selected node
+- Exercises normal DB close and ZooKeeper session teardown
+- Lets the remaining nodes elect a new leader if needed
+
+Restart nodes:
+
+There is no dedicated restart script in this baseline. Use one of these flows:
+
+Restart the full local cluster:
+
+```bash
+./scripts/stop-nodes.sh
+./scripts/run-nodes.sh
+```
+
+Rejoin a node after you terminated one node for failover testing:
+
+```bash
+./scripts/run-nodes.sh
+```
+
+Because `run-nodes.sh` currently starts the three-node local set, the practical restart flow for now is to stop any current node processes and bring the baseline cluster back up together.
+
 ## Planned Interfaces
 
 - Client Endpoints: Payment submission, payment status query, and ledger read/query interfaces for operators and demo clients.

@@ -40,3 +40,15 @@ Expected validation flow:
 4. Confirm the stopped node becomes unreachable.
 5. Confirm one of the remaining followers becomes the new leader.
 6. Restart the stopped node and confirm it rejoins as a member and receives an updated role.
+
+Operational commands used for this validation:
+1. Check local ZooKeeper readiness: `./scripts/run-zk.sh`
+2. Start the baseline cluster: `./scripts/run-nodes.sh`
+3. Kill only the elected leader: `./scripts/kill-leader.sh`
+4. Stop all local nodes cleanly: `./scripts/stop-nodes.sh`
+5. Terminate a chosen node directly: `curl -X POST http://localhost:8001/admin/shutdown`
+6. Restore the baseline cluster after a kill/stop drill: `./scripts/run-nodes.sh`
+
+Current limitation:
+- We do not have a dedicated single-node restart controller yet.
+- The practical restart path in this milestone is to stop any remaining local node processes and start the standard three-node set again with `./scripts/run-nodes.sh`.
