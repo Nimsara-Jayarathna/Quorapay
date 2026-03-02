@@ -116,7 +116,7 @@ Recommended validation steps for the assignment:
 
 ### 3. Leader restart / stale leader fencing
 
-1. After a leader crash test, restore the local cluster: `./scripts/run-nodes.sh`
+1. After a leader crash test, restart the old leader process only: `./scripts/run-node.sh A` (or `B` / `C` as needed)
 2. Re-read all `/status` responses
 3. Verify:
    - the restarted old leader reports `FOLLOWER` unless it truly re-acquired the lease
@@ -171,4 +171,5 @@ Optimizations used or intended:
 ## Current Limitation
 
 - We do not have a dedicated single-node restart controller yet.
-- The practical restart path in this milestone is to stop any remaining local node processes and start the standard three-node set again with `./scripts/run-nodes.sh`.
+- Single-node rejoin is supported with `./scripts/run-node.sh <A|B|C>`, but it still uses the fixed local node mapping.
+- For a full reset of the demo cluster, stop any remaining local node processes and start the standard three-node set again with `./scripts/run-nodes.sh`.

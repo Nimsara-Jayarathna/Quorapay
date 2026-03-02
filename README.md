@@ -124,6 +124,20 @@ What it does:
 - Starts node C on `8003`
 - Reuses the root `.env` values for `ZK_ADDR`, `ZK_ROOT`, and `CORS_ALLOWED_ORIGINS`
 
+Start one specific node:
+
+```bash
+./scripts/run-node.sh A
+./scripts/run-node.sh B
+./scripts/run-node.sh C
+```
+
+What it does:
+- Starts only the requested node instance
+- Uses the fixed local mapping for that node (`A=8001`, `B=8002`, `C=8003`)
+- Reuses the same root `.env` values as the cluster launcher
+- Is useful when a single node needs to rejoin after a targeted shutdown or failover drill
+
 Stop all nodes:
 
 ```bash
@@ -172,10 +186,12 @@ Restart the full local cluster:
 Rejoin a node after you terminated one node for failover testing:
 
 ```bash
-./scripts/run-nodes.sh
+./scripts/run-node.sh A
+./scripts/run-node.sh B
+./scripts/run-node.sh C
 ```
 
-Because `run-nodes.sh` currently starts the three-node local set, the practical restart flow for now is to stop any current node processes and bring the baseline cluster back up together.
+Use the matching node ID for the node you want to bring back. To fully reset the whole local cluster, use `./scripts/stop-nodes.sh` followed by `./scripts/run-nodes.sh`.
 
 ## Planned Interfaces
 
