@@ -6,6 +6,8 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PID_DIR="$ROOT_DIR/data/pids"
 LOG_DIR="$ROOT_DIR/data/logs"
 GO_CACHE_DIR="$ROOT_DIR/data/.gocache"
+BIN_DIR="$ROOT_DIR/data/bin"
+NODE_BIN="$BIN_DIR/quorapay-node"
 ENV_FILE="$ROOT_DIR/.env"
 
 if [ $# -ne 1 ]; then
@@ -36,7 +38,7 @@ case "$NODE_ID" in
 		;;
 esac
 
-mkdir -p "$ROOT_DIR/data/nodeA" "$ROOT_DIR/data/nodeB" "$ROOT_DIR/data/nodeC" "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR"
+mkdir -p "$ROOT_DIR/data/nodeA" "$ROOT_DIR/data/nodeB" "$ROOT_DIR/data/nodeC" "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
 
 if ! command -v go >/dev/null 2>&1; then
 	echo "go is required but was not found on PATH" >&2
@@ -71,6 +73,7 @@ if command -v lsof >/dev/null 2>&1 && lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/nul
 fi
 
 cd "$ROOT_DIR"
+env GOCACHE="$GO_CACHE_DIR" go build -o "$NODE_BIN" ./cmd/quorapay-node
 
 nohup env \
 	GOCACHE="$GO_CACHE_DIR" \
@@ -81,7 +84,7 @@ nohup env \
 	ZK_ADDR="$ZK_ADDR" \
 	ZK_ROOT="$ZK_ROOT" \
 	STORAGE_PATH="$STORAGE_PATH" \
-	go run ./cmd/quorapay-node >"$LOG_FILE" 2>&1 &
+	"$NODE_BIN" >"$LOG_FILE" 2>&1 &
 
 echo $! >"$PID_FILE"
 echo "started node $NODE_ID on port $PORT (pid $(cat "$PID_FILE"))"
