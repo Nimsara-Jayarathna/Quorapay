@@ -1,16 +1,13 @@
 # docker
 
 ## Overview
-Docker-based local orchestration for ZooKeeper and multiple Quorapay nodes. Containers run the same node image with different `NODE_ID`, `PORT`, and `STORAGE_PATH` values.
+This directory is currently reserved for future container-based deployment assets. The baseline milestone no longer includes Docker-managed ZooKeeper or node orchestration.
 
 ## Contents
-- `docker-compose` definitions for local clusters.
-- Container environment variable mappings.
-- Volume and network defaults for demos.
-- Startup ordering notes for repeatable runs.
+- Placeholder documentation only.
 
 ## Not in Scope
-- Production container hardening and scaling.
+- Active runtime orchestration for the current baseline.
 - Application business and protocol logic.
 - CI/CD pipeline definitions.
 

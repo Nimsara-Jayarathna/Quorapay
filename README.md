@@ -21,7 +21,7 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 - `client/`: Client-facing interfaces (`cli/`, `web/`) for driving and observing prototype behavior.
 - `cmd/quorapay-node/`: Node service entrypoint location.
 - `configs/`: Node instance and ZooKeeper environment configuration.
-- `deployments/`: Local and Docker orchestration assets for demos.
+- `deployments/`: Deployment and environment assets for demos.
 - `docs/`: Architecture, protocol, testing, evaluation, and team-specific working documents.
 - `internal/`: Core domain modules (`api`, `coordination`, `replication`, `storage`, `timesync`, `consensus`).
 - `scripts/`: Developer automation scripts.
@@ -37,6 +37,68 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 5. Terminate the leader node process to trigger failover.
 6. Continue submitting requests after leadership recovery.
 7. Verify each node ledger converges to the same committed state.
+
+## Baseline Run
+
+This baseline milestone wires only ZooKeeper membership/leader election plus per-node SQLite initialization. It does not include payment submission, replication, quorum commit, or consensus libraries beyond ZooKeeper coordination.
+
+1. Start ZooKeeper:
+
+```bash
+./scripts/run-zk.sh
+```
+
+`run-zk.sh` is now a readiness check only. It verifies that your locally installed ZooKeeper is already listening on the configured `ZK_ADDR` (default `localhost:2181`).
+
+2. Start the three node instances (A/B/C) from the same codebase:
+
+```bash
+cp .env.example .env
+./scripts/run-nodes.sh
+```
+
+The root `.env` file is used by `scripts/run-nodes.sh`. Set `CORS_ALLOWED_ORIGINS` there if you want the browser-based web client to call the API:
+
+```bash
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+ZK_ADDR=localhost:2181
+ZK_ROOT=/quorapay
+```
+
+3. Verify status and leader election:
+
+```bash
+curl http://localhost:8001/status
+curl http://localhost:8002/status
+curl http://localhost:8003/status
+```
+
+One node should report `"role":"LEADER"` and the others should report `"role":"FOLLOWER"`.
+
+4. Verify each node can read its local ledger (empty for the baseline):
+
+```bash
+curl http://localhost:8001/ledger
+curl http://localhost:8002/ledger
+curl http://localhost:8003/ledger
+```
+
+5. Trigger failover by killing the current leader, then re-check `/status`:
+
+```bash
+./scripts/kill-leader.sh
+curl http://localhost:8001/status
+curl http://localhost:8002/status
+curl http://localhost:8003/status
+```
+
+6. Stop background node processes when finished:
+
+```bash
+./scripts/stop-nodes.sh
+```
+
+Runtime SQLite files are created under `./data/nodeA/ledger.db`, `./data/nodeB/ledger.db`, and `./data/nodeC/ledger.db`. The `data/` directory is intentionally ignored by git.
 
 ## Planned Interfaces
 
