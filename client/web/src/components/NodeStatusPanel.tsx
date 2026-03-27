@@ -12,6 +12,32 @@ type NodeStatusPanelProps = {
   onRequestTerminate: () => void;
 };
 
+function getFaultStateClasses(state: string | undefined): string {
+  switch (state) {
+    case "HEALTHY":
+      return "bg-emerald-100 text-emerald-800 border-emerald-200";
+    case "FAILED":
+      return "bg-red-100 text-red-800 border-red-200";
+    case "RECOVERING":
+      return "bg-amber-100 text-amber-800 border-amber-200";
+    case "REJOINED":
+      return "bg-blue-100 text-blue-800 border-blue-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function getRoleClasses(role: string | undefined): string {
+  switch (role) {
+    case "LEADER":
+      return "bg-indigo-100 text-indigo-800 border-indigo-200";
+    case "FOLLOWER":
+      return "bg-slate-100 text-slate-800 border-slate-200";
+    default:
+      return "bg-zinc-100 text-zinc-700 border-zinc-200";
+  }
+}
+
 function NodeStatusPanel({
   nodeUrls,
   selectedNodeIndex,
@@ -79,7 +105,11 @@ function NodeStatusPanel({
           </div>
           <div className="p-3">
             <dt className="font-medium text-slate-500">role</dt>
-            <dd className="mt-1 text-slate-900">{status?.role ?? "-"}</dd>
+            <dd className="mt-1">
+              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${getRoleClasses(status?.role)}`}>
+                {status?.role ?? "-"}
+              </span>
+            </dd>
           </div>
           <div className="p-3">
             <dt className="font-medium text-slate-500">leader_id</dt>
@@ -96,6 +126,42 @@ function NodeStatusPanel({
           <div className="p-3">
             <dt className="font-medium text-slate-500">commit_index</dt>
             <dd className="mt-1 text-slate-900">{status?.commit_index ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">fault_state</dt>
+            <dd className="mt-1">
+              <span
+                className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${getFaultStateClasses(
+                  status?.fault_state,
+                )}`}
+              >
+                {status?.fault_state ?? "-"}
+              </span>
+            </dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">last_fault_reason</dt>
+            <dd className="mt-1 text-slate-900">{status?.last_fault_reason ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">last_state_change</dt>
+            <dd className="mt-1 text-slate-900">{status?.last_state_change ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">zk_error</dt>
+            <dd className="mt-1 break-all text-slate-900">{status?.zk_error ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">term</dt>
+            <dd className="mt-1 text-slate-900">{status?.term ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">log_head</dt>
+            <dd className="mt-1 text-slate-900">{status?.log_head ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">status_refresh_ms</dt>
+            <dd className="mt-1 text-slate-900">{status?.status_refresh_ms ?? "-"}</dd>
           </div>
         </dl>
       </div>

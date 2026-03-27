@@ -5,6 +5,13 @@ export type NodeStatus = {
   leader_url?: string;
   last_log_index?: number;
   commit_index?: number;
+  fault_state?: "HEALTHY" | "FAILED" | "RECOVERING" | "REJOINED" | string;
+  last_fault_reason?: string;
+  last_state_change?: string;
+  zk_error?: string;
+  term?: number;
+  log_head?: number;
+  status_refresh_ms?: number;
 };
 
 export type PaymentRequest = {

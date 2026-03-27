@@ -13,6 +13,7 @@ const (
 	RoleLeader   = "LEADER"
 	RoleFollower = "FOLLOWER"
 	RoleUnknown  = "UNKNOWN"
+	rejoinedHold = 3 * time.Second
 )
 
 type Config struct {
@@ -40,6 +41,7 @@ type Manager struct {
 	eligibleSince  time.Time
 	lastLoopStart  time.Time
 	lastKnownLease leaderLease
+	rejoinedSince  time.Time
 }
 
 func NewManager(cfg Config) *Manager {
@@ -57,6 +59,7 @@ func NewManager(cfg Config) *Manager {
 			ZKAddr:      cfg.ZKAddr,
 			StoragePath: cfg.StoragePath,
 			ZKError:     "zookeeper not connected",
+			FaultState:  FaultStateRecovering,
 		},
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
@@ -117,16 +120,28 @@ func (m *Manager) consumeSessionEvents() {
 			switch event.State {
 			case zk.StateHasSession:
 				m.clearZKError()
+				if err := m.setFaultState(FaultStateRecovering, "zookeeper session established"); err != nil {
+					m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+				}
 			case zk.StateDisconnected:
 				m.setZKError(errors.New("zookeeper disconnected"))
+				if err := m.setFaultState(FaultStateFailed, "zookeeper disconnected"); err != nil {
+					m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+				}
 			case zk.StateExpired:
 				m.mu.Lock()
 				m.candidatePath = ""
 				m.eligibleSince = time.Time{}
 				m.mu.Unlock()
 				m.setZKError(errors.New("zookeeper session expired"))
+				if err := m.setFaultState(FaultStateFailed, "zookeeper session expired"); err != nil {
+					m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+				}
 			case zk.StateAuthFailed:
 				m.setZKError(errors.New("zookeeper authentication failed"))
+				if err := m.setFaultState(FaultStateFailed, "zookeeper authentication failed"); err != nil {
+					m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+				}
 			}
 		}
 	}
@@ -185,6 +200,21 @@ func (m *Manager) reconcile() error {
 			return nil
 		}
 		return err
+	}
+
+	m.mu.RLock()
+	currentFaultState := m.status.FaultState
+	joinedAt := m.rejoinedSince
+	m.mu.RUnlock()
+
+	if currentFaultState == FaultStateRecovering {
+		if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
+			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+		}
+	} else if currentFaultState == FaultStateRejoined && !joinedAt.IsZero() && time.Since(joinedAt) >= rejoinedHold {
+		if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
+			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+		}
 	}
 
 	m.clearZKError()
