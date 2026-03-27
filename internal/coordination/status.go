@@ -1,7 +1,15 @@
 package coordination
 
 import (
+	"fmt"
 	"time"
+)
+
+const (
+	FaultStateHealthy    = "HEALTHY"
+	FaultStateFailed     = "FAILED"
+	FaultStateRecovering = "RECOVERING"
+	FaultStateRejoined   = "REJOINED"
 )
 
 type Status struct {
@@ -17,7 +25,66 @@ type Status struct {
 	ZKAddr          string `json:"zk_addr"`
 	StoragePath     string `json:"storage_path"`
 	ZKError         string `json:"zk_error,omitempty"`
+	FaultState      string `json:"fault_state"`
+	LastFaultReason string `json:"last_fault_reason,omitempty"`
+	LastStateChange string `json:"last_state_change,omitempty"`
 	Timestamp       string `json:"timestamp"`
+}
+
+func isValidFaultState(state string) bool {
+	switch state {
+	case FaultStateHealthy, FaultStateFailed, FaultStateRecovering, FaultStateRejoined:
+		return true
+	default:
+		return false
+	}
+}
+
+func canTransitionFaultState(current string, next string) bool {
+	switch current {
+	case "":
+		return next == FaultStateRecovering
+	case FaultStateRecovering:
+		return next == FaultStateRejoined || next == FaultStateFailed
+	case FaultStateRejoined:
+		return next == FaultStateHealthy || next == FaultStateFailed
+	case FaultStateHealthy:
+		return next == FaultStateFailed || next == FaultStateRecovering
+	case FaultStateFailed:
+		return next == FaultStateRecovering
+	default:
+		return false
+	}
+}
+
+func (m *Manager) setFaultState(next string, reason string) error {
+	if !isValidFaultState(next) {
+		return fmt.Errorf("invalid fault state: %s", next)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	current := m.status.FaultState
+	if current == next {
+		if reason != "" {
+			m.status.LastFaultReason = reason
+		}
+		return nil
+	}
+
+	if !canTransitionFaultState(current, next) {
+		return fmt.Errorf("invalid fault state transition: %s -> %s", current, next)
+	}
+
+	m.status.FaultState = next
+	m.status.LastStateChange = now
+	if reason != "" {
+		m.status.LastFaultReason = reason
+	}
+	return nil
 }
 
 func (m *Manager) markEligible() {
