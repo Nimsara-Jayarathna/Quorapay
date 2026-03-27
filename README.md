@@ -73,7 +73,7 @@ curl http://localhost:8002/status
 curl http://localhost:8003/status
 ```
 
-One node should report `"role":"LEADER"` and the others should report `"role":"FOLLOWER"`.
+One node should report `"role":"LEADER"` and the others should report `"role":"FOLLOWER"`. The status payload now also includes agreement metadata such as `term`, `log_head`, `election_count`, and `last_election_ms`.
 
 4. Verify each node can read its local ledger (empty for the baseline):
 
@@ -92,6 +92,14 @@ curl http://localhost:8002/status
 curl http://localhost:8003/status
 ```
 
+You can also terminate a specific node directly through the node API or the web client:
+
+```bash
+curl -X POST http://localhost:8002/admin/shutdown
+```
+
+This local-only admin endpoint is intended for failover drills so you can verify that leader election updates correctly when an individual node exits.
+
 6. Stop background node processes when finished:
 
 ```bash
@@ -99,6 +107,91 @@ curl http://localhost:8003/status
 ```
 
 Runtime SQLite files are created under `./data/nodeA/ledger.db`, `./data/nodeB/ledger.db`, and `./data/nodeC/ledger.db`. The `data/` directory is intentionally ignored by git.
+
+## Node Operations
+
+The current baseline uses scripts for process lifecycle management. There is no separate restart service yet, so restart is done by stopping and starting nodes again.
+
+Start all nodes:
+
+```bash
+./scripts/run-nodes.sh
+```
+
+What it does:
+- Starts node A on `8001`
+- Starts node B on `8002`
+- Starts node C on `8003`
+- Reuses the root `.env` values for `ZK_ADDR`, `ZK_ROOT`, and `CORS_ALLOWED_ORIGINS`
+
+Start one specific node:
+
+```bash
+./scripts/run-node.sh A
+./scripts/run-node.sh B
+./scripts/run-node.sh C
+```
+
+What it does:
+- Starts only the requested node instance
+- Uses the fixed local mapping for that node (`A=8001`, `B=8002`, `C=8003`)
+- Reuses the same root `.env` values as the cluster launcher
+- Is useful when a single node needs to rejoin after a targeted shutdown or failover drill
+
+Stop all nodes:
+
+```bash
+./scripts/stop-nodes.sh
+```
+
+What it does:
+- Stops tracked background node processes
+- Also force-cleans any stale process still listening on `8001`, `8002`, or `8003`
+
+Kill the current leader only:
+
+```bash
+./scripts/kill-leader.sh
+```
+
+What it does:
+- Reads `/status` from the three nodes
+- Detects which node currently reports `LEADER`
+- Terminates only that leader process so you can observe re-election
+
+Terminate one specific node directly:
+
+```bash
+curl -X POST http://localhost:8001/admin/shutdown
+curl -X POST http://localhost:8002/admin/shutdown
+curl -X POST http://localhost:8003/admin/shutdown
+```
+
+What it does:
+- Gracefully shuts down only the selected node
+- Exercises normal DB close and ZooKeeper session teardown
+- Lets the remaining nodes elect a new leader if needed
+
+Restart nodes:
+
+There is no dedicated restart script in this baseline. Use one of these flows:
+
+Restart the full local cluster:
+
+```bash
+./scripts/stop-nodes.sh
+./scripts/run-nodes.sh
+```
+
+Rejoin a node after you terminated one node for failover testing:
+
+```bash
+./scripts/run-node.sh A
+./scripts/run-node.sh B
+./scripts/run-node.sh C
+```
+
+Use the matching node ID for the node you want to bring back. To fully reset the whole local cluster, use `./scripts/stop-nodes.sh` followed by `./scripts/run-nodes.sh`.
 
 ## Planned Interfaces
 
