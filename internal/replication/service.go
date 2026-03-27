@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 var ErrQuorumReplicationNotImplemented = errors.New("quorum replication is not implemented yet")
@@ -53,16 +54,25 @@ func NewReplicationService(ledger LocalLedger, transport FollowerTransport) *Rep
 
 // ReplicateWithQuorum is a placeholder for the future end-to-end quorum flow.
 func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogEntry, followerBaseURLs []string) (QuorumReplicationResult, error) {
-	_ = ctx
-	_ = s.ledger
-	_ = s.transport
+	if s.ledger == nil {
+		return QuorumReplicationResult{}, fmt.Errorf("local ledger is not configured")
+	}
+
+	if err := entry.Validate(); err != nil {
+		return QuorumReplicationResult{}, fmt.Errorf("invalid replication entry: %w", err)
+	}
+
+	entry.Status = StatusPending
+
+	totalNodes := 1 + len(followerBaseURLs)
+	requiredQuorum := totalNodes/2 + 1
 
 	result := QuorumReplicationResult{
 		PaymentID:       entry.PaymentID,
 		QuorumReached:   false,
 		LocalAppendOK:   false,
 		AckCount:        0,
-		RequiredQuorum:  0,
+		RequiredQuorum:  requiredQuorum,
 		Committed:       false,
 		FollowerResults: make([]FollowerReplicationResult, 0, len(followerBaseURLs)),
 	}
@@ -71,5 +81,13 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 		result.FollowerResults = append(result.FollowerResults, FollowerReplicationResult{FollowerBaseURL: baseURL})
 	}
 
-	return result, ErrQuorumReplicationNotImplemented
+	if err := s.ledger.AppendPending(ctx, entry); err != nil {
+		return result, fmt.Errorf("append pending payment %s locally: %w", entry.PaymentID, err)
+	}
+
+	result.LocalAppendOK = true
+	result.AckCount = 1
+	result.QuorumReached = result.AckCount >= result.RequiredQuorum
+
+	return result, nil
 }
