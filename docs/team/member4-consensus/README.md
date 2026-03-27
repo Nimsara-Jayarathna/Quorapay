@@ -141,6 +141,37 @@ Recommended validation steps for the assignment:
 2. Verify that node A becomes unreachable
 3. Check the remaining nodes for correct leader continuity or re-election depending on which node was terminated
 
+## Automated Validation Scripts
+
+Use these scripts to validate consensus and election behavior in a repeatable way:
+
+1. Start prerequisites:
+   - `./scripts/run-zk.sh`
+   - `./scripts/run-nodes.sh`
+2. Run full election/fencing validation:
+   - `./scripts/test-election-consensus.sh`
+3. Optional fault-state sequence validation (coordination + recovery states):
+   - `./scripts/test-fault-state-sequence.sh 8003`
+
+What `test-election-consensus.sh` validates:
+- exactly one leader exists before failover
+- leader changes after forced leader kill
+- `term` increases on leadership change
+- restarted old leader is fenced and rejoins as `FOLLOWER`
+- single-leader invariant still holds after restart
+
+### Executed and Passed Evidence
+
+The following command was executed locally and passed:
+
+`./scripts/test-election-consensus.sh`
+
+Observed PASS summary:
+- exactly one leader before and after failover
+- term increased on leadership change (`17 -> 18` in observed run)
+- restarted old leader was fenced and rejoined as follower
+- final leader remained stable after restart
+
 ## Performance and Overhead Discussion
 
 Why the ZooKeeper-backed lease reduces split-brain risk:
