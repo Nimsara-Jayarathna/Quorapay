@@ -149,9 +149,11 @@ Use these scripts to validate consensus and election behavior in a repeatable wa
    - `./scripts/run-zk.sh`
    - `./scripts/run-nodes.sh`
 2. Run full election/fencing validation:
-   - `./scripts/test-election-consensus.sh`
-3. Optional fault-state sequence validation (coordination + recovery states):
-   - `./scripts/test-fault-state-sequence.sh 8003`
+   - `./scripts/tests/test-election-consensus.sh`
+3. Run ZooKeeper outage/recovery validation:
+   - `./scripts/tests/test-zk-outage-recovery.sh`
+4. Optional fault-state sequence validation (coordination + recovery states):
+   - `./scripts/tests/test-fault-state-sequence.sh 8003`
 
 What `test-election-consensus.sh` validates:
 - exactly one leader exists before failover
@@ -164,7 +166,7 @@ What `test-election-consensus.sh` validates:
 
 The following command was executed locally and passed:
 
-`./scripts/test-election-consensus.sh`
+`./scripts/tests/test-election-consensus.sh`
 
 Observed PASS summary:
 - exactly one leader before and after failover
