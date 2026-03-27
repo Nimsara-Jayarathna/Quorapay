@@ -60,7 +60,8 @@ func (r AppendEntriesResponse) Validate() error {
 // For now, LogIndex is enough because the log index uniquely identifies the
 // target entry in the replicated ledger.
 type CommitRequest struct {
-	LogIndex int64 `json:"log_index"`
+	LogIndex  int64  `json:"log_index"`
+	PaymentID string `json:"payment_id"`
 }
 
 // Validate performs basic structural validation for a commit request.

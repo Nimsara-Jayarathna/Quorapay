@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"quorapay/internal/coordination"
+	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
 
@@ -22,6 +23,8 @@ type StatusSource interface {
 
 type LedgerStore interface {
 	ListPayments(context.Context) ([]storage.Payment, error)
+	AppendPending(context.Context, replication.LogEntry) error
+	CommitByPaymentID(context.Context, string) error
 }
 
 type handler struct {
@@ -41,6 +44,8 @@ func NewHandler(cfg Config, status StatusSource, ledger LedgerStore) http.Handle
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/status", h.statusHandler)
 	mux.HandleFunc("/ledger", h.ledgerHandler)
+	mux.HandleFunc("/internal/append", h.internalAppendHandler)
+	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
 	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
 }
