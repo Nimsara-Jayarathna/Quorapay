@@ -89,6 +89,7 @@ func (m *Manager) setFaultState(next string, reason string) error {
 	if reason != "" {
 		m.status.LastFaultReason = reason
 	}
+	m.cfg.Logger.Printf("fault state transition node_id=%s from=%s to=%s reason=%q at=%s", m.cfg.NodeID, current, next, reason, now)
 	return nil
 }
 
@@ -145,6 +146,7 @@ func (m *Manager) setNoLeaderStatus() {
 	m.status.LeaderURL = ""
 	m.status.Term = 0
 	m.status.LogHead = logHead
+	m.cfg.Logger.Printf("coordination status update node_id=%s role=%s leader_id=%s term=%d log_head=%d", m.cfg.NodeID, m.status.Role, m.status.LeaderID, m.status.Term, m.status.LogHead)
 }
 
 func (m *Manager) setZKError(err error) {
@@ -157,6 +159,7 @@ func (m *Manager) setZKError(err error) {
 	m.status.LeaderURL = ""
 	m.status.Term = 0
 	m.status.LogHead = 0
+	m.cfg.Logger.Printf("zookeeper error node_id=%s error=%q role=%s", m.cfg.NodeID, m.status.ZKError, m.status.Role)
 }
 
 func (m *Manager) clearZKError() {
