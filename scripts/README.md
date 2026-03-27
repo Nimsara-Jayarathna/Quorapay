@@ -9,6 +9,13 @@ Helper scripts for developer workflows and reproducible demos. Scripts should im
 - Demo data generation scripts.
 - Local convenience wrappers for repeated commands.
 
+## Test Scripts
+- Consensus and failover validation scripts are in `scripts/tests/`.
+- Member 4 related checks:
+  - `./scripts/tests/test-election-consensus.sh`
+  - `./scripts/tests/test-zk-outage-recovery.sh`
+  - `./scripts/tests/test-fault-state-sequence.sh <port>`
+
 ## Not in Scope
 - Core application business logic.
 - Long-running production automation.

@@ -164,15 +164,29 @@ What `test-election-consensus.sh` validates:
 
 ### Executed and Passed Evidence
 
-The following command was executed locally and passed:
+The following commands were executed locally and passed:
 
 `./scripts/tests/test-election-consensus.sh`
+`./scripts/tests/test-zk-outage-recovery.sh`
+`./scripts/tests/test-fault-state-sequence.sh 8003`
 
-Observed PASS summary:
+Observed PASS summary for election consensus test:
 - exactly one leader before and after failover
 - term increased on leadership change (`17 -> 18` in observed run)
 - restarted old leader was fenced and rejoined as follower
 - final leader remained stable after restart
+
+Observed PASS summary for ZooKeeper outage recovery test:
+- pre-outage cluster had exactly one leader (`leader=C`, `term=19` in observed run)
+- during outage all nodes reported `role=UNKNOWN` with `zk_error`
+- after ZooKeeper recovery exactly one leader was restored (`leader=C`, `term=19`)
+- term remained monotonic (`19 -> 19`)
+
+Observed PASS summary for fault-state sequence test (node `C` on port `8003`):
+- initial state was `HEALTHY`
+- outage transition observed: `HEALTHY -> FAILED`
+- recovery transition observed: `FAILED -> REJOINED -> HEALTHY`
+- `REJOINED` remained visible for multiple polls before returning to `HEALTHY`
 
 ## Performance and Overhead Discussion
 
