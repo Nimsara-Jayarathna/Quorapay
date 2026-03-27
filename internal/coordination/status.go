@@ -81,6 +81,11 @@ func (m *Manager) setFaultState(next string, reason string) error {
 
 	m.status.FaultState = next
 	m.status.LastStateChange = now
+	if next == FaultStateRejoined {
+		m.rejoinedSince = time.Now()
+	} else if current == FaultStateRejoined {
+		m.rejoinedSince = time.Time{}
+	}
 	if reason != "" {
 		m.status.LastFaultReason = reason
 	}

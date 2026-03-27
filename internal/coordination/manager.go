@@ -13,6 +13,7 @@ const (
 	RoleLeader   = "LEADER"
 	RoleFollower = "FOLLOWER"
 	RoleUnknown  = "UNKNOWN"
+	rejoinedHold = 3 * time.Second
 )
 
 type Config struct {
@@ -40,6 +41,7 @@ type Manager struct {
 	eligibleSince  time.Time
 	lastLoopStart  time.Time
 	lastKnownLease leaderLease
+	rejoinedSince  time.Time
 }
 
 func NewManager(cfg Config) *Manager {
@@ -200,10 +202,19 @@ func (m *Manager) reconcile() error {
 		return err
 	}
 
-	if err := m.setFaultState(FaultStateRejoined, "coordination state synchronized"); err != nil {
-		m.cfg.Logger.Printf("fault state transition skipped: %v", err)
-	} else if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
-		m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+	m.mu.RLock()
+	currentFaultState := m.status.FaultState
+	joinedAt := m.rejoinedSince
+	m.mu.RUnlock()
+
+	if currentFaultState == FaultStateRecovering {
+		if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
+			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+		}
+	} else if currentFaultState == FaultStateRejoined && !joinedAt.IsZero() && time.Since(joinedAt) >= rejoinedHold {
+		if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
+			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
+		}
 	}
 
 	m.clearZKError()
