@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"quorapay/internal/coordination"
 	"quorapay/internal/replication"
@@ -85,13 +86,14 @@ func TestInternalAppendSuccess(t *testing.T) {
 		LeaderID: "A",
 		Term:     1,
 		Entries: []replication.LogEntry{{
-			LogIndex:  10,
-			Term:      1,
-			LeaderID:  "A",
-			PaymentID: "pay-1",
-			Amount:    25,
-			Currency:  "USD",
-			Status:    replication.StatusPending,
+			LogIndex:     10,
+			Term:         1,
+			LeaderID:     "A",
+			PaymentID:    "pay-1",
+			Amount:       25,
+			Currency:     "USD",
+			Status:       replication.StatusPending,
+			PhysicalTime: time.Now().UnixNano(),
 		}},
 	}
 
@@ -117,13 +119,14 @@ func TestInternalAppendDuplicateIsIdempotent(t *testing.T) {
 		LeaderID: "A",
 		Term:     2,
 		Entries: []replication.LogEntry{{
-			LogIndex:  11,
-			Term:      2,
-			LeaderID:  "A",
-			PaymentID: "pay-dup",
-			Amount:    50,
-			Currency:  "USD",
-			Status:    replication.StatusPending,
+			LogIndex:     11,
+			Term:         2,
+			LeaderID:     "A",
+			PaymentID:    "pay-dup",
+			Amount:       50,
+			Currency:     "USD",
+			Status:       replication.StatusPending,
+			PhysicalTime: time.Now().UnixNano(),
 		}},
 	}
 
@@ -248,14 +251,15 @@ func TestInternalAppendUpdatesLamportLogicalTime(t *testing.T) {
 		LeaderID: "A",
 		Term:     1,
 		Entries: []replication.LogEntry{{
-			LogIndex:    20,
-			Term:        1,
-			LeaderID:    "A",
-			PaymentID:   "pay-lamport",
-			Amount:      5,
-			Currency:    "USD",
-			Status:      replication.StatusPending,
-			LogicalTime: 10,
+			LogIndex:     20,
+			Term:         1,
+			LeaderID:     "A",
+			PaymentID:    "pay-lamport",
+			Amount:       5,
+			Currency:     "USD",
+			Status:       replication.StatusPending,
+			LogicalTime:  10,
+			PhysicalTime: time.Now().UnixNano(),
 		}},
 	}
 
@@ -270,6 +274,32 @@ func TestInternalAppendUpdatesLamportLogicalTime(t *testing.T) {
 	}
 	if got.LogicalTime <= 10 {
 		t.Fatalf("logical_time = %d, want > 10 (receive rule)", got.LogicalTime)
+	}
+}
+
+func TestInternalAppendRejectsTooOldPhysicalTime(t *testing.T) {
+	store := newStubLedgerStore()
+	h := NewHandler(Config{NodeID: "B", CORSAllowed: "*"}, stubStatusSource{}, store)
+
+	body := replication.AppendEntriesRequest{
+		LeaderID: "A",
+		Term:     1,
+		Entries: []replication.LogEntry{{
+			LogIndex:     21,
+			Term:         1,
+			LeaderID:     "A",
+			PaymentID:    "pay-old-time",
+			Amount:       5,
+			Currency:     "USD",
+			Status:       replication.StatusPending,
+			LogicalTime:  10,
+			PhysicalTime: time.Now().Add(-5 * time.Second).UnixNano(),
+		}},
+	}
+
+	resp := performJSONRequest(t, h, http.MethodPost, "/internal/append", body)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
 	}
 }
 

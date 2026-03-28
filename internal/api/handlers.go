@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
+
+const warnClockSkew = 300 * time.Millisecond
 
 func (h *handler) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -119,6 +122,32 @@ func (h *handler) internalAppendHandler(w http.ResponseWriter, r *http.Request) 
 				Message: "logical_time cannot be negative",
 			})
 			return
+		}
+		if entry.PhysicalTime <= 0 {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "physical_time is required",
+			})
+			return
+		}
+
+		msgTime := time.Unix(0, entry.PhysicalTime)
+		offset := time.Since(msgTime)
+		h.skewTracker.Record(entry.LeaderID, offset)
+		if err := h.timeValidator.Validate(entry.LeaderID, msgTime); err != nil {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: err.Error(),
+			})
+			return
+		}
+		if offset < 0 {
+			offset = -offset
+		}
+		if offset > warnClockSkew {
+			log.Printf("clock skew warning leader_id=%s observed_offset=%s payment_id=%s", entry.LeaderID, offset, entry.PaymentID)
 		}
 
 		// Lamport receive rule: local = max(local, remote) + 1

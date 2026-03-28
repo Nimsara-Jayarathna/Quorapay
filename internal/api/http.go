@@ -54,6 +54,8 @@ type handler struct {
 	replicator       Replicator
 	leaderHTTPClient *http.Client
 	lamportClock     *timesync.LamportClock
+	skewTracker      *timesync.SkewTracker
+	timeValidator    *timesync.Validator
 }
 
 func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Status }, ledger LedgerStore, replicator ...Replicator) http.Handler {
@@ -80,7 +82,9 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		replicator:       repl,
 		leaderHTTPClient: leaderClient,
 		lamportClock:     timesync.NewLamportClock(),
+		skewTracker:      timesync.NewSkewTracker(),
 	}
+	h.timeValidator = timesync.NewValidator(h.skewTracker)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
