@@ -32,6 +32,7 @@ export type PaymentResponse = {
 
 export type LedgerItem = {
   log_index: number;
+  logical_time?: number;
   payment_id: string;
   amount: number;
   currency: string;
