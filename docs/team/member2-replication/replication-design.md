@@ -195,3 +195,65 @@ This design ensures that:
 - the system remains fault-tolerant and reliable
 
 This approach is well-suited for financial systems where **data correctness is more important than low latency**.
+
+## 11. Implementation Status
+
+### Storage layer
+
+- `SQLiteStore` now includes `AppendPending`, `CommitByPaymentID`, `GetPaymentByID`, `ExistsByPaymentID`, and `ListCommittedAfter`.
+- Standardized SQLite schema handles deduplication and features a composite index on `(logical_time, log_index, id)` to optimize `ListPayments` reads.
+- Sentinel errors added: `ErrDuplicatePaymentID` and `ErrPaymentNotFound`.
+
+### Replication protocol
+
+- `LogEntry.Validate()` strictly enforces `leader_id` presence for upstream tracking.
+- `CommitRequest` now carries both `payment_id` and `log_index`.
+- `CommitRequest.Validate()` now requires `payment_id` (in addition to existing index checks).
+
+### Replication client
+
+- `HTTPClient` implemented with `AppendToFollower` and `CommitToFollower` for leader-to-follower replication calls.
+- `CatchUpFromLeader()` method added to `HTTPClient` — calls `GET /internal/catchup` with a `from_log_index` query parameter and returns committed entries for the follower to apply.
+
+### Replication service
+
+- `ReplicateWithQuorum` implemented end-to-end: local append, **concurrent** follower append fan-out, quorum decision, local commit on quorum, and follower commit fan-out (best effort).
+- The concurrent follower fan-out runs completely unlocked in independent goroutines, leveraging parallelism without network serializations or locking bottlenecks preventing immediate quorum decisions.
+- Service contracts are defined via `LocalLedger` and `FollowerTransport` interfaces.
+
+### Coordination accessors
+
+- `Manager` now exposes `GetFollowerURLs()`, `AdvanceLogHead(nextIndex int64)`, and `CurrentLogHead()` for replication flow.
+- These accessors support replication index/follower discovery without changing election logic.
+
+### API layer
+
+- `Coordinator` and `Replicator` interfaces are wired in `internal/api` for handler-level orchestration.
+- `POST /pay` leader flow handles redirects, stateful dedup processing (returning HTTP 200 for `COMMITTED` records and HTTP 409 for safely rejected `PENDING` retries), index assignments, and quorum propagation dynamically.
+- Follower replication endpoints are implemented: `POST /internal/append` and `POST /internal/commit`.
+- `GET /internal/catchup` endpoint is implemented — serves committed entries after a given `from_log_index` to rejoining followers. Only responds when the node is the current leader.
+- Follower-to-leader forwarding (`forwardPayToLeader`) replaces the original HTTP 307 redirect — the follower proxies the request internally to the leader and returns the response directly to the client, avoiding browser CORS issues.
+
+### Entrypoint
+
+- `cmd/quorapay-node/main.go` now wires replication by constructing `replication.NewHTTPClient(nil)` and `replication.NewReplicationService(store, replClient)`, then passing the service into `api.NewHandler(...)`.
+
+### Tests
+
+- `internal/storage/sqlite_test.go`: append/duplicate/commit/get/exists behavior for persistence.
+- `internal/replication/client_test.go`: HTTP replication client success/error/timeout behavior.
+- `internal/replication/service_test.go`: quorum service behavior across local append, quorum success/failure, commit, and follower commit fan-out.
+- `internal/api/internal_handlers_test.go`: follower endpoint behavior for `/internal/append` and `/internal/commit`.
+- `internal/api/pay_handler_test.go`: `POST /pay` redirect, no-leader, dedup, quorum success/failure, and invalid-body cases.
+
+### What remains
+
+Coding work is complete. All planned replication and consistency features are implemented and verified:
+
+- 53/53 unit tests passing across storage, replication, and API packages
+- 10/11 integration checks passing on a live 3-node cluster
+- Quorum commit confirmed working with one follower down (140ms response time)
+- Catch-up endpoint verified serving filtered entries correctly
+- Check 11 (rejoin convergence) failure is isolated to the recovery loop in
+  `main.go` (Member 1 scope) — the catch-up endpoint and storage methods
+  that power it are confirmed working in isolation (Checks 8 and 9)

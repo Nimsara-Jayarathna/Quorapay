@@ -51,17 +51,20 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
           <thead className="bg-slate-50">
             <tr>
               <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">logical_time</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">received_by</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">processed_by</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
             {items.length === 0 ? (
               <tr>
-                <td className="px-3 py-4 text-slate-500" colSpan={6}>
+                <td className="px-3 py-4 text-slate-500" colSpan={9}>
                   No ledger entries to display.
                 </td>
               </tr>
@@ -69,10 +72,13 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
               items.map((item) => (
                 <tr key={`${item.log_index}-${item.payment_id}`}>
                   <td className="px-3 py-2 text-slate-700">{item.log_index}</td>
+                  <td className="px-3 py-2 text-slate-700">{item.logical_time ?? "-"}</td>
                   <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
                   <td className="px-3 py-2 text-slate-700">{item.amount}</td>
                   <td className="px-3 py-2 text-slate-700">{item.currency}</td>
                   <td className="px-3 py-2 text-slate-700">{item.status}</td>
+                  <td className="px-3 py-2 text-slate-700">{item.received_by ?? "-"}</td>
+                  <td className="px-3 py-2 text-slate-700">{item.processed_by ?? "-"}</td>
                   <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
                 </tr>
               ))

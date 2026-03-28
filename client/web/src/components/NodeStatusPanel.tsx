@@ -163,6 +163,14 @@ function NodeStatusPanel({
             <dt className="font-medium text-slate-500">status_refresh_ms</dt>
             <dd className="mt-1 text-slate-900">{status?.status_refresh_ms ?? "-"}</dd>
           </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">lamport_time</dt>
+            <dd className="mt-1 text-slate-900">{status?.lamport_time ?? "-"}</dd>
+          </div>
+          <div className="p-3">
+            <dt className="font-medium text-slate-500">clock_skew_ms</dt>
+            <dd className="mt-1 text-slate-900">{status?.clock_skew_ms ?? "-"}</dd>
+          </div>
         </dl>
       </div>
     </section>

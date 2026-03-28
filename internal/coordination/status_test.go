@@ -40,6 +40,9 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	if got := m.status.FaultState; got != FaultStateRecovering {
 		t.Fatalf("initial fault state = %q, want %q", got, FaultStateRecovering)
 	}
+	if !m.status.RecoveryInProgress {
+		t.Fatalf("initial recovery_in_progress = false, want true")
+	}
 
 	if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
 		t.Fatalf("setFaultState REJOINED failed: %v", err)
@@ -53,8 +56,11 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	if m.rejoinedSince.IsZero() {
 		t.Fatalf("rejoinedSince should be set when entering REJOINED")
 	}
+	if !m.status.RecoveryInProgress {
+		t.Fatalf("recovery_in_progress = false in REJOINED, want true")
+	}
 
-	if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
+	if err := m.setFaultState(FaultStateHealthy, "recovery complete; node operating normally"); err != nil {
 		t.Fatalf("setFaultState HEALTHY failed: %v", err)
 	}
 	if got := m.status.FaultState; got != FaultStateHealthy {
@@ -63,8 +69,35 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	if m.rejoinedSince.IsZero() == false {
 		t.Fatalf("rejoinedSince should be cleared when leaving REJOINED")
 	}
-	if got := m.status.LastFaultReason; got != "node operating normally" {
-		t.Fatalf("last_fault_reason = %q, want %q", got, "node operating normally")
+	if got := m.status.LastFaultReason; got != "recovery complete; node operating normally" {
+		t.Fatalf("last_fault_reason = %q, want %q", got, "recovery complete; node operating normally")
+	}
+	if m.status.RecoveryInProgress {
+		t.Fatalf("recovery_in_progress = true in HEALTHY, want false")
+	}
+	if m.status.LastRecoveryTime == "" {
+		t.Fatalf("last_recovery_time should be set when becoming HEALTHY after REJOINED")
+	}
+}
+
+func TestMarkRecoveryCaughtUpAndFailureReason(t *testing.T) {
+	m := NewManager(Config{
+		NodeID:      "A",
+		ZKAddr:      "localhost:2181",
+		StoragePath: "./data/nodeA/ledger.db",
+	})
+
+	m.MarkRecoveryCatchUpFailed("leader unreachable")
+	if got := m.status.LastFaultReason; got != "catch-up failed: leader unreachable" {
+		t.Fatalf("last_fault_reason = %q, want %q", got, "catch-up failed: leader unreachable")
+	}
+
+	m.MarkRecoveryCaughtUp()
+	if !m.recoveryCaughtUp {
+		t.Fatalf("recoveryCaughtUp = false, want true")
+	}
+	if got := m.status.LastFaultReason; got != "catch-up complete" {
+		t.Fatalf("last_fault_reason = %q, want %q", got, "catch-up complete")
 	}
 }
 
@@ -85,4 +118,3 @@ func TestSetFaultState_InvalidTransition(t *testing.T) {
 		t.Fatalf("fault state changed on invalid transition: got %q, want %q", got, FaultStateRecovering)
 	}
 }
-

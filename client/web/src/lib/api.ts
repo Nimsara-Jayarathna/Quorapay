@@ -12,6 +12,8 @@ export type NodeStatus = {
   term?: number;
   log_head?: number;
   status_refresh_ms?: number;
+  lamport_time?: number;
+  clock_skew_ms?: number;
 };
 
 export type PaymentRequest = {
@@ -32,11 +34,14 @@ export type PaymentResponse = {
 
 export type LedgerItem = {
   log_index: number;
+  logical_time?: number;
   payment_id: string;
   amount: number;
   currency: string;
   status: "COMMITTED" | "FAILED" | "PENDING" | string;
   created_at: string;
+  received_by?: string;
+  processed_by?: string;
   server_id?: string;
 };
 
