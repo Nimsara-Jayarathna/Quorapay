@@ -49,8 +49,9 @@ func (s *stubCoordinator) CurrentLogHead() (int64, error) {
 }
 
 type stubReplicator struct {
-	result replication.QuorumReplicationResult
-	err    error
+	result    replication.QuorumReplicationResult
+	err       error
+	lastEntry replication.LogEntry
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -59,7 +60,8 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func (s stubReplicator) ReplicateWithQuorum(_ context.Context, _ replication.LogEntry, _ []string) (replication.QuorumReplicationResult, error) {
+func (s *stubReplicator) ReplicateWithQuorum(_ context.Context, entry replication.LogEntry, _ []string) (replication.QuorumReplicationResult, error) {
+	s.lastEntry = entry
 	return s.result, s.err
 }
 
@@ -107,11 +109,12 @@ func TestPayHandler_NonLeaderForwardsToLeader(t *testing.T) {
 		logHead:   10,
 	}
 
+	repl := &stubReplicator{}
 	h := NewHandler(Config{
 		NodeID:           "node-b",
 		CORSAllowed:      "*",
 		LeaderHTTPClient: leaderClient,
-	}, coord, newStubLedgerStore(), stubReplicator{})
+	}, coord, newStubLedgerStore(), repl)
 
 	resp := performJSONRequest(t, h, http.MethodPost, "/pay", replication.PaymentRequest{
 		PaymentID: "pay-forwarded",
@@ -144,7 +147,7 @@ func TestPayHandler_NoLeaderReturns503(t *testing.T) {
 		logHead:   10,
 	}
 
-	h := NewHandler(Config{NodeID: "node-c", CORSAllowed: "*"}, coord, newStubLedgerStore(), stubReplicator{})
+	h := NewHandler(Config{NodeID: "node-c", CORSAllowed: "*"}, coord, newStubLedgerStore(), &stubReplicator{})
 
 	resp := performJSONRequest(t, h, http.MethodPost, "/pay", replication.PaymentRequest{
 		PaymentID: "pay-no-leader",
@@ -167,7 +170,7 @@ func TestPayHandler_DuplicatePaymentReturnsOK(t *testing.T) {
 		logHead: 20,
 	}
 
-	h := NewHandler(Config{NodeID: "node-a", CORSAllowed: "*"}, coord, store, stubReplicator{})
+	h := NewHandler(Config{NodeID: "node-a", CORSAllowed: "*"}, coord, store, &stubReplicator{})
 
 	resp := performJSONRequest(t, h, http.MethodPost, "/pay", replication.PaymentRequest{
 		PaymentID: "pay-dup",
@@ -197,7 +200,7 @@ func TestPayHandler_QuorumReachedReturns200(t *testing.T) {
 		followerURLs: []string{"http://node-b:8080", "http://node-c:8080"},
 	}
 
-	repl := stubReplicator{result: replication.QuorumReplicationResult{
+	repl := &stubReplicator{result: replication.QuorumReplicationResult{
 		QuorumReached: true,
 		Committed:     true,
 	}}
@@ -222,6 +225,9 @@ func TestPayHandler_QuorumReachedReturns200(t *testing.T) {
 	if out.Status != "OK" {
 		t.Fatalf("status field = %q, want %q", out.Status, "OK")
 	}
+	if repl.lastEntry.LogicalTime <= 0 {
+		t.Fatalf("logical_time = %d, want > 0", repl.lastEntry.LogicalTime)
+	}
 }
 
 func TestPayHandler_QuorumNotReachedReturns503(t *testing.T) {
@@ -231,7 +237,7 @@ func TestPayHandler_QuorumNotReachedReturns503(t *testing.T) {
 		logHead: 40,
 	}
 
-	repl := stubReplicator{result: replication.QuorumReplicationResult{
+	repl := &stubReplicator{result: replication.QuorumReplicationResult{
 		QuorumReached: false,
 		Committed:     false,
 	}}
@@ -256,7 +262,7 @@ func TestPayHandler_InvalidBodyReturns400(t *testing.T) {
 		logHead: 5,
 	}
 
-	h := NewHandler(Config{NodeID: "node-a", CORSAllowed: "*"}, coord, newStubLedgerStore(), stubReplicator{})
+	h := NewHandler(Config{NodeID: "node-a", CORSAllowed: "*"}, coord, newStubLedgerStore(), &stubReplicator{})
 
 	req := httptest.NewRequest(http.MethodPost, "/pay", strings.NewReader("{"))
 	req.Header.Set("Content-Type", "application/json")
