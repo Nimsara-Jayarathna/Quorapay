@@ -12,6 +12,8 @@ export type NodeStatus = {
   term?: number;
   log_head?: number;
   status_refresh_ms?: number;
+  lamport_time?: number;
+  clock_skew_ms?: number;
 };
 
 export type PaymentRequest = {

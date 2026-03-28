@@ -32,7 +32,22 @@ func (h *handler) statusHandler(w http.ResponseWriter, _ *http.Request) {
 		status.StoragePath = h.cfg.StoragePath
 	}
 
-	writeJSON(w, http.StatusOK, status)
+	type statusResponse struct {
+		coordination.Status
+		LamportTime int64 `json:"lamport_time"`
+		ClockSkewMS int64 `json:"clock_skew_ms"`
+	}
+
+	clockSkewMS := int64(0)
+	if maxOffset, ok := h.skewTracker.MaxAbsOffset(); ok {
+		clockSkewMS = maxOffset.Milliseconds()
+	}
+
+	writeJSON(w, http.StatusOK, statusResponse{
+		Status:      status,
+		LamportTime: int64(h.lamportClock.Now()),
+		ClockSkewMS: clockSkewMS,
+	})
 }
 
 func (h *handler) ledgerHandler(w http.ResponseWriter, r *http.Request) {

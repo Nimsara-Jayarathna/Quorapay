@@ -303,6 +303,52 @@ func TestInternalAppendRejectsTooOldPhysicalTime(t *testing.T) {
 	}
 }
 
+func TestStatusIncludesLamportAndClockSkew(t *testing.T) {
+	store := newStubLedgerStore()
+	h := NewHandler(Config{NodeID: "B", CORSAllowed: "*"}, stubStatusSource{}, store)
+
+	// Drive Lamport + skew state via one append.
+	body := replication.AppendEntriesRequest{
+		LeaderID: "A",
+		Term:     1,
+		Entries: []replication.LogEntry{{
+			LogIndex:     22,
+			Term:         1,
+			LeaderID:     "A",
+			PaymentID:    "pay-status-sync",
+			Amount:       5,
+			Currency:     "USD",
+			Status:       replication.StatusPending,
+			LogicalTime:  8,
+			PhysicalTime: time.Now().Add(-400 * time.Millisecond).UnixNano(),
+		}},
+	}
+	appendResp := performJSONRequest(t, h, http.MethodPost, "/internal/append", body)
+	if appendResp.Code != http.StatusOK {
+		t.Fatalf("append status = %d, want %d", appendResp.Code, http.StatusOK)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+	lamport, ok := out["lamport_time"].(float64)
+	if !ok || lamport <= 0 {
+		t.Fatalf("lamport_time = %v, want > 0", out["lamport_time"])
+	}
+	skew, ok := out["clock_skew_ms"].(float64)
+	if !ok || skew <= 0 {
+		t.Fatalf("clock_skew_ms = %v, want > 0", out["clock_skew_ms"])
+	}
+}
+
 func performJSONRequest(t *testing.T, h http.Handler, method string, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 
