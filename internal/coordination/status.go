@@ -13,22 +13,24 @@ const (
 )
 
 type Status struct {
-	NodeID          string `json:"node_id"`
-	Role            string `json:"role"`
-	LeaderID        string `json:"leader_id"`
-	LeaderURL       string `json:"leader_url"`
-	Term            int64  `json:"term"`
-	LogHead         int64  `json:"log_head"`
-	ElectionCount   int64  `json:"election_count,omitempty"`
-	LastElectionMS  int64  `json:"last_election_ms,omitempty"`
-	StatusRefreshMS int64  `json:"status_refresh_ms,omitempty"`
-	ZKAddr          string `json:"zk_addr"`
-	StoragePath     string `json:"storage_path"`
-	ZKError         string `json:"zk_error,omitempty"`
-	FaultState      string `json:"fault_state"`
-	LastFaultReason string `json:"last_fault_reason,omitempty"`
-	LastStateChange string `json:"last_state_change,omitempty"`
-	Timestamp       string `json:"timestamp"`
+	NodeID             string `json:"node_id"`
+	Role               string `json:"role"`
+	LeaderID           string `json:"leader_id"`
+	LeaderURL          string `json:"leader_url"`
+	Term               int64  `json:"term"`
+	LogHead            int64  `json:"log_head"`
+	ElectionCount      int64  `json:"election_count,omitempty"`
+	LastElectionMS     int64  `json:"last_election_ms,omitempty"`
+	StatusRefreshMS    int64  `json:"status_refresh_ms,omitempty"`
+	ZKAddr             string `json:"zk_addr"`
+	StoragePath        string `json:"storage_path"`
+	ZKError            string `json:"zk_error,omitempty"`
+	FaultState         string `json:"fault_state"`
+	RecoveryInProgress bool   `json:"recovery_in_progress"`
+	LastRecoveryTime   string `json:"last_recovery_time,omitempty"`
+	LastFaultReason    string `json:"last_fault_reason,omitempty"`
+	LastStateChange    string `json:"last_state_change,omitempty"`
+	Timestamp          string `json:"timestamp"`
 }
 
 func isValidFaultState(state string) bool {
@@ -81,6 +83,10 @@ func (m *Manager) setFaultState(next string, reason string) error {
 
 	m.status.FaultState = next
 	m.status.LastStateChange = now
+	m.status.RecoveryInProgress = next == FaultStateRecovering || next == FaultStateRejoined
+	if current == FaultStateRejoined && next == FaultStateHealthy {
+		m.status.LastRecoveryTime = now
+	}
 	if next == FaultStateRejoined {
 		m.rejoinedSince = time.Now()
 	} else if current == FaultStateRejoined {
