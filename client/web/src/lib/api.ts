@@ -57,6 +57,16 @@ export type ShutdownResponse = {
 
 export type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";
 
+export type ClusterNode = {
+  node_id: string;
+  url: string;
+};
+
+export type ClusterNodesResponse = {
+  count: number;
+  items: ClusterNode[];
+};
+
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -106,4 +116,12 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+export async function fetchClusterNodes(baseUrl: string): Promise<string[]> {
+  const result = await fetchJson<ClusterNodesResponse>(`${baseUrl}/cluster/nodes`);
+  const urls = (result.items ?? [])
+    .map((item) => item.url?.trim())
+    .filter((url): url is string => Boolean(url));
+  return Array.from(new Set(urls));
 }

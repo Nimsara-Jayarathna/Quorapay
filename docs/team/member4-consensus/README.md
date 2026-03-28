@@ -154,6 +154,10 @@ Use these scripts to validate consensus and election behavior in a repeatable wa
    - `./scripts/tests/test-zk-outage-recovery.sh`
 4. Optional fault-state sequence validation (coordination + recovery states):
    - `./scripts/tests/test-fault-state-sequence.sh 8003`
+5. Temporary single-node isolation and automatic reconvergence:
+   - `./scripts/tests/test-temporary-node-isolation-convergence.sh 6`
+6. High payment-rate performance run (throughput + latency):
+   - `./scripts/tests/test-high-rate-throughput.sh 120 12 leader`
 
 What `test-election-consensus.sh` validates:
 - exactly one leader exists before failover
@@ -161,6 +165,17 @@ What `test-election-consensus.sh` validates:
 - `term` increases on leadership change
 - restarted old leader is fenced and rejoins as `FOLLOWER`
 - single-leader invariant still holds after restart
+
+What `test-temporary-node-isolation-convergence.sh` validates:
+- a follower can be temporarily isolated (paused) without permanent divergence
+- writes can continue through the remaining active quorum
+- once resumed, the isolated follower catches up and all ledgers converge again
+
+What `test-high-rate-throughput.sh` reports:
+- total requests, concurrency, and target routing mode
+- success/failure counts under load
+- total duration, throughput (requests/second)
+- average, p95, and max end-to-end request latency
 
 ### Executed and Passed Evidence
 

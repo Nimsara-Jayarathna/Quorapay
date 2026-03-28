@@ -21,7 +21,7 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-medium text-slate-900">Ledger Viewer</h2>
+        <h2 className="text-lg font-medium text-slate-900">Ledger</h2>
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={statusFilter}
@@ -37,9 +37,16 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
             type="button"
             onClick={onRefreshLedger}
             disabled={ledgerLoading}
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Refresh ledger"
+            title="Refresh ledger"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {ledgerLoading ? "Refreshing..." : "Refresh Ledger"}
+            <svg viewBox="0 0 24 24" className={`h-5 w-5 ${ledgerLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M20 12a8 8 0 0 1-13.66 5.66" />
+              <path d="M4 12a8 8 0 0 1 13.66-5.66" />
+              <path d="M7 17H4v3" />
+              <path d="M17 7h3V4" />
+            </svg>
           </button>
         </div>
       </div>
@@ -50,15 +57,15 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">logical_time</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">received_by</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">processed_by</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Log Index</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Logical Time</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Payment ID</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Amount</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Currency</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Received By</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Processed By</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">Created At</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">

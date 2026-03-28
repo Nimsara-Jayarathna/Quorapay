@@ -15,6 +15,8 @@ Helper scripts for developer workflows and reproducible demos. Scripts should im
   - `./scripts/tests/test-election-consensus.sh`
   - `./scripts/tests/test-zk-outage-recovery.sh`
   - `./scripts/tests/test-fault-state-sequence.sh <port>`
+  - `./scripts/tests/test-temporary-node-isolation-convergence.sh [isolation_seconds]`
+  - `./scripts/tests/test-high-rate-throughput.sh [total_requests] [concurrency] [leader|round_robin]`
 
 ## Not in Scope
 - Core application business logic.

@@ -19,8 +19,9 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 ## Repository Layout
 
 - `client/web/`: React web client for payment submission, status inspection, and ledger viewing.
-- `cmd/quorapay-node/`: Node service entrypoint.
-- `data/`: Runtime artifacts (SQLite DBs, logs, pids); generated locally and git-ignored.
+- `client/cli/`: CLI client for payment submission and status inspection.
+- `data/`: Runtime artifacts (SQLite DBs, logs, pids); generated locally.
+- `docs/`: Architecture, protocol, testing, evaluation, and team/consensus working documents.
 - `docs/`: Team documentation and consensus notes.
 - `internal/`: Core backend modules (API, coordination, replication, storage, time sync, consensus).
 - `scripts/`: Local automation for ZooKeeper, node lifecycle, and test scenarios.
