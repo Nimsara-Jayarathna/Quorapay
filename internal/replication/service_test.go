@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -22,14 +23,32 @@ func (s *stubLocalLedger) CommitByPaymentID(context.Context, string) error {
 	return nil
 }
 
-type panicTransport struct{}
-
-func (panicTransport) AppendToFollower(context.Context, string, AppendEntriesRequest) (AppendEntriesResponse, error) {
-	panic("AppendToFollower should not be called in phase 4.2")
+type stubTransport struct {
+	appendResults map[string]AppendEntriesResponse
+	appendErrors  map[string]error
+	appendCalls   int
+	lastRequests  map[string]AppendEntriesRequest
 }
 
-func (panicTransport) CommitToFollower(context.Context, string, CommitRequest) (CommitResponse, error) {
-	panic("CommitToFollower should not be called in phase 4.2")
+func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL string, req AppendEntriesRequest) (AppendEntriesResponse, error) {
+	s.appendCalls++
+	if s.lastRequests == nil {
+		s.lastRequests = make(map[string]AppendEntriesRequest)
+	}
+	s.lastRequests[followerBaseURL] = req
+
+	if err, ok := s.appendErrors[followerBaseURL]; ok {
+		return AppendEntriesResponse{}, err
+	}
+	if resp, ok := s.appendResults[followerBaseURL]; ok {
+		return resp, nil
+	}
+
+	return AppendEntriesResponse{Success: false, Message: "no response configured"}, nil
+}
+
+func (*stubTransport) CommitToFollower(context.Context, string, CommitRequest) (CommitResponse, error) {
+	panic("CommitToFollower should not be called in phase 4.3")
 }
 
 func baseEntry() LogEntry {
@@ -46,9 +65,9 @@ func baseEntry() LogEntry {
 
 func TestReplicationService_ReplicateWithQuorum_LocalAppendInitializesAckCount(t *testing.T) {
 	ledger := &stubLocalLedger{}
-	svc := NewReplicationService(ledger, panicTransport{})
+	svc := NewReplicationService(ledger, &stubTransport{})
 
-	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002"})
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), nil)
 	if err != nil {
 		t.Fatalf("ReplicateWithQuorum() error = %v", err)
 	}
@@ -91,7 +110,7 @@ func TestReplicationService_ReplicateWithQuorum_RequiredQuorumCalculation(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ledger := &stubLocalLedger{}
-			svc := NewReplicationService(ledger, panicTransport{})
+			svc := NewReplicationService(ledger, &stubTransport{})
 
 			result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), tt.followers)
 			if err != nil {
@@ -114,7 +133,7 @@ func TestReplicationService_ReplicateWithQuorum_RequiredQuorumCalculation(t *tes
 func TestReplicationService_ReplicateWithQuorum_LocalAppendFailure(t *testing.T) {
 	appendErr := errors.New("db write failed")
 	ledger := &stubLocalLedger{appendErr: appendErr}
-	svc := NewReplicationService(ledger, panicTransport{})
+	svc := NewReplicationService(ledger, &stubTransport{})
 
 	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), nil)
 	if err == nil {
@@ -132,5 +151,126 @@ func TestReplicationService_ReplicateWithQuorum_LocalAppendFailure(t *testing.T)
 	}
 	if result.RequiredQuorum != 1 {
 		t.Fatalf("RequiredQuorum = %d, want 1", result.RequiredQuorum)
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_OneFollowerSuccessReachesQuorum(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "reject"},
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	followers := []string{"http://node-b:8002", "http://node-c:8003"}
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), followers)
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if result.RequiredQuorum != 2 {
+		t.Fatalf("RequiredQuorum = %d, want 2", result.RequiredQuorum)
+	}
+	if result.AckCount != 2 {
+		t.Fatalf("AckCount = %d, want 2", result.AckCount)
+	}
+	if !result.QuorumReached {
+		t.Fatalf("QuorumReached = false, want true")
+	}
+	if !result.FollowerResults[0].AppendAcknowledged {
+		t.Fatalf("follower 0 append ack = false, want true")
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_BothFollowersFailNoQuorum(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendErrors: map[string]error{
+			"http://node-b:8002": errors.New("timeout"),
+			"http://node-c:8003": errors.New("connection refused"),
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	followers := []string{"http://node-b:8002", "http://node-c:8003"}
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), followers)
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if result.AckCount != 1 {
+		t.Fatalf("AckCount = %d, want 1", result.AckCount)
+	}
+	if result.QuorumReached {
+		t.Fatalf("QuorumReached = true, want false")
+	}
+	if result.FollowerResults[0].Error == "" || result.FollowerResults[1].Error == "" {
+		t.Fatalf("expected follower errors to be recorded")
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_MixedFollowerOutcomesCountAcks(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "stale term"},
+			"http://node-d:8004": {Success: true},
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	followers := []string{"http://node-b:8002", "http://node-c:8003", "http://node-d:8004"}
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), followers)
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if result.RequiredQuorum != 3 {
+		t.Fatalf("RequiredQuorum = %d, want 3", result.RequiredQuorum)
+	}
+	if result.AckCount != 3 {
+		t.Fatalf("AckCount = %d, want 3", result.AckCount)
+	}
+	if !result.QuorumReached {
+		t.Fatalf("QuorumReached = false, want true")
+	}
+	if result.FollowerResults[1].Error != "stale term" {
+		t.Fatalf("follower error = %q, want stale term", result.FollowerResults[1].Error)
+	}
+
+	for _, follower := range followers {
+		req, ok := transport.lastRequests[follower]
+		if !ok {
+			t.Fatalf("missing append request for follower %s", follower)
+		}
+		if len(req.Entries) != 1 {
+			t.Fatalf("entries len for %s = %d, want 1", follower, len(req.Entries))
+		}
+		if req.Entries[0].Status != StatusPending {
+			t.Fatalf("entry status for %s = %q, want %q", follower, req.Entries[0].Status, StatusPending)
+		}
+		if req.LeaderID == "" {
+			t.Fatalf("leader_id for %s is empty", follower)
+		}
+	}
+
+	if transport.appendCalls != len(followers) {
+		t.Fatalf("append calls = %d, want %d", transport.appendCalls, len(followers))
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_TransportRequiredWhenFollowersPresent(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	svc := NewReplicationService(ledger, nil)
+
+	_, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002"})
+	if err == nil {
+		t.Fatalf("ReplicateWithQuorum() expected transport configuration error")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "transport") {
+		t.Fatalf("error = %q, expected transport context", got)
 	}
 }

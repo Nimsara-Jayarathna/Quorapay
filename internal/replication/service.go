@@ -57,6 +57,9 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 	if s.ledger == nil {
 		return QuorumReplicationResult{}, fmt.Errorf("local ledger is not configured")
 	}
+	if len(followerBaseURLs) > 0 && s.transport == nil {
+		return QuorumReplicationResult{}, fmt.Errorf("follower transport is not configured")
+	}
 
 	if err := entry.Validate(); err != nil {
 		return QuorumReplicationResult{}, fmt.Errorf("invalid replication entry: %w", err)
@@ -85,8 +88,38 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 		return result, fmt.Errorf("append pending payment %s locally: %w", entry.PaymentID, err)
 	}
 
+	appendReq := AppendEntriesRequest{
+		LeaderID: entry.LeaderID,
+		Term:     entry.Term,
+		Entries:  []LogEntry{entry},
+	}
+	if err := appendReq.Validate(); err != nil {
+		return result, fmt.Errorf("build append request for payment %s: %w", entry.PaymentID, err)
+	}
+
 	result.LocalAppendOK = true
 	result.AckCount = 1
+
+	for i, baseURL := range followerBaseURLs {
+		resp, err := s.transport.AppendToFollower(ctx, baseURL, appendReq)
+		if err != nil {
+			result.FollowerResults[i].Error = err.Error()
+			continue
+		}
+
+		if resp.Success {
+			result.FollowerResults[i].AppendAcknowledged = true
+			result.AckCount++
+			continue
+		}
+
+		if resp.Message != "" {
+			result.FollowerResults[i].Error = resp.Message
+		} else {
+			result.FollowerResults[i].Error = "append not acknowledged"
+		}
+	}
+
 	result.QuorumReached = result.AckCount >= result.RequiredQuorum
 
 	return result, nil
