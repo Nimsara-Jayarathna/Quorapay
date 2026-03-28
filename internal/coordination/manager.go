@@ -2,6 +2,7 @@ package coordination
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -90,6 +91,37 @@ func (m *Manager) CurrentStatus() Status {
 	status := m.status
 	status.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	return status
+}
+
+func (m *Manager) GetFollowerURLs() ([]string, error) {
+	if m.conn == nil || !m.started {
+		return []string{}, fmt.Errorf("zookeeper connection is not initialized")
+	}
+
+	children, _, err := m.conn.Children(m.membersPath())
+	if err != nil {
+		return []string{}, fmt.Errorf("read cluster members: %w", err)
+	}
+
+	followers := make([]string, 0, len(children))
+	for _, child := range children {
+		data, _, getErr := m.conn.Get(m.membersPath() + "/" + child)
+		if getErr != nil {
+			if errors.Is(getErr, zk.ErrNoNode) {
+				continue
+			}
+			return []string{}, fmt.Errorf("read member %s data: %w", child, getErr)
+		}
+
+		memberURL := string(data)
+		if memberURL == "" || memberURL == m.cfg.BaseURL {
+			continue
+		}
+
+		followers = append(followers, memberURL)
+	}
+
+	return followers, nil
 }
 
 func (m *Manager) Close() error {
