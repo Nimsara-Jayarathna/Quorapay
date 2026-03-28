@@ -132,6 +132,9 @@ func (m *Manager) refreshStatusFromLease() error {
 	}
 
 	m.mu.Lock()
+	prevRole := m.status.Role
+	prevLeaderID := m.status.LeaderID
+	prevTerm := m.status.Term
 	m.status.Role = role
 	m.status.LeaderID = lease.LeaderID
 	m.status.LeaderURL = lease.LeaderURL
@@ -140,6 +143,20 @@ func (m *Manager) refreshStatusFromLease() error {
 	m.status.ZKError = ""
 	m.lastKnownLease = lease
 	m.mu.Unlock()
+
+	if prevRole != role || prevLeaderID != lease.LeaderID || prevTerm != lease.Term {
+		m.cfg.Logger.Printf(
+			"leadership status update node_id=%s role=%s leader_id=%s term=%d lease_id=%s (prev_role=%s prev_leader_id=%s prev_term=%d)",
+			m.cfg.NodeID,
+			role,
+			lease.LeaderID,
+			lease.Term,
+			lease.LeaseID,
+			prevRole,
+			prevLeaderID,
+			prevTerm,
+		)
+	}
 
 	return nil
 }

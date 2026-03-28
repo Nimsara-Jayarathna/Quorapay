@@ -37,6 +37,8 @@ export type LedgerItem = {
   currency: string;
   status: "COMMITTED" | "FAILED" | "PENDING" | string;
   created_at: string;
+  received_by?: string;
+  processed_by?: string;
   server_id?: string;
 };
 

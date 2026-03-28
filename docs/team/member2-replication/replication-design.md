@@ -195,3 +195,52 @@ This design ensures that:
 - the system remains fault-tolerant and reliable
 
 This approach is well-suited for financial systems where **data correctness is more important than low latency**.
+
+## 11. Implementation Status
+
+### Storage layer
+
+- `SQLiteStore` now includes `AppendPending`, `CommitByPaymentID`, `GetPaymentByID`, `ExistsByPaymentID`, and `ListCommittedAfter`.
+- Sentinel errors added: `ErrDuplicatePaymentID` and `ErrPaymentNotFound`.
+
+### Replication protocol
+
+- `CommitRequest` now carries both `payment_id` and `log_index`.
+- `CommitRequest.Validate()` now requires `payment_id` (in addition to existing index checks).
+
+### Replication client
+
+- `HTTPClient` implemented with `AppendToFollower` and `CommitToFollower` for leader-to-follower replication calls.
+
+### Replication service
+
+- `ReplicateWithQuorum` implemented end-to-end: local append, **concurrent** follower append fan-out, quorum decision, local commit on quorum, and follower commit fan-out (best effort).
+- The concurrent follower fan-out uses goroutines and a buffered channel to prevent a slow or failed follower from blocking the quorum decision.
+- Service contracts are defined via `LocalLedger` and `FollowerTransport` interfaces.
+
+### Coordination accessors
+
+- `Manager` now exposes `GetFollowerURLs()`, `AdvanceLogHead(nextIndex int64)`, and `CurrentLogHead()` for replication flow.
+- These accessors support replication index/follower discovery without changing election logic.
+
+### API layer
+
+- `Coordinator` and `Replicator` interfaces are wired in `internal/api` for handler-level orchestration.
+- `POST /pay` leader flow is implemented: leader check/redirect, dedup check, log index assignment, quorum replication call, and response handling.
+- Follower replication endpoints are implemented: `POST /internal/append` and `POST /internal/commit`.
+
+### Entrypoint
+
+- `cmd/quorapay-node/main.go` now wires replication by constructing `replication.NewHTTPClient(nil)` and `replication.NewReplicationService(store, replClient)`, then passing the service into `api.NewHandler(...)`.
+
+### Tests
+
+- `internal/storage/sqlite_test.go`: append/duplicate/commit/get/exists behavior for persistence.
+- `internal/replication/client_test.go`: HTTP replication client success/error/timeout behavior.
+- `internal/replication/service_test.go`: quorum service behavior across local append, quorum success/failure, commit, and follower commit fan-out.
+- `internal/api/internal_handlers_test.go`: follower endpoint behavior for `/internal/append` and `/internal/commit`.
+- `internal/api/pay_handler_test.go`: `POST /pay` redirect, no-leader, dedup, quorum success/failure, and invalid-body cases.
+
+### What remains
+
+- PR 4 catch-up path is still pending coordination with Member 1: `GET /internal/catchup` endpoint and related sync handler flow are not implemented yet.
