@@ -28,7 +28,7 @@ type Payment struct {
 	Currency     string  `json:"currency"`
 	Status       string  `json:"status"`
 	PhysicalTime int64   `json:"physical_time,omitempty"`
-	LogicalTime  int64   `json:"logical_time,omitempty"`
+	LogicalTime  int64   `json:"logical_time"`
 	CreatedAt    string  `json:"created_at"`
 	ReceivedBy   string  `json:"received_by"`
 	ProcessedBy  string  `json:"processed_by"`
@@ -72,7 +72,7 @@ func (s *SQLiteStore) ListPayments(ctx context.Context) ([]Payment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
 		FROM payments
-		ORDER BY id ASC
+		ORDER BY logical_time ASC, log_index ASC, id ASC
 	`)
 	if err != nil {
 		return nil, err

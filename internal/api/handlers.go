@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -29,7 +30,22 @@ func (h *handler) statusHandler(w http.ResponseWriter, _ *http.Request) {
 		status.StoragePath = h.cfg.StoragePath
 	}
 
-	writeJSON(w, http.StatusOK, status)
+	type statusResponse struct {
+		coordination.Status
+		LamportTime int64 `json:"lamport_time"`
+		ClockSkewMS int64 `json:"clock_skew_ms"`
+	}
+
+	clockSkewMS := int64(0)
+	if maxOffset, ok := h.skewTracker.MaxAbsOffset(); ok {
+		clockSkewMS = maxOffset.Milliseconds()
+	}
+
+	writeJSON(w, http.StatusOK, statusResponse{
+		Status:      status,
+		LamportTime: int64(h.lamportClock.Now()),
+		ClockSkewMS: clockSkewMS,
+	})
 }
 
 func (h *handler) ledgerHandler(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +128,63 @@ func (h *handler) internalAppendHandler(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+		if entry.LogicalTime < 0 {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "logical_time cannot be negative",
+			})
+			return
+		}
+		if entry.PhysicalTime <= 0 {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "physical_time is required",
+			})
+			return
+		}
+
+		msgTime := time.Unix(0, entry.PhysicalTime)
+		now := time.Now()
+		offset := now.Sub(msgTime)
+		absOffset := offset
+		if absOffset < 0 {
+			absOffset = -absOffset
+		}
+		h.skewTracker.Record(entry.LeaderID, offset)
+
+		age := now.Sub(msgTime)
+		if age > h.maxMessageAge {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "message from " + entry.LeaderID + " is too old: age=" + age.String() + " exceeds max=" + h.maxMessageAge.String(),
+			})
+			return
+		}
+		if msgTime.Sub(now) > h.maxFutureDrift {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "message from " + entry.LeaderID + " is too far in the future: drift=" + msgTime.Sub(now).String() + " exceeds max=" + h.maxFutureDrift.String(),
+			})
+			return
+		}
+		if absOffset > h.skewReject {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "message from " + entry.LeaderID + " rejected: clock skew exceeds tolerance",
+			})
+			return
+		}
+		if absOffset > h.skewWarn {
+			log.Printf("clock skew warning leader_id=%s observed_offset=%s payment_id=%s", entry.LeaderID, absOffset, entry.PaymentID)
+		}
+
+		// Lamport receive rule: local = max(local, remote) + 1
+		entry.LogicalTime = int64(h.lamportClock.Receive(uint64(entry.LogicalTime)))
 
 		if err := h.ledger.AppendPending(r.Context(), entry); err != nil {
 			if errors.Is(err, storage.ErrDuplicatePaymentID) {

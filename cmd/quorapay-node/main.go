@@ -19,13 +19,17 @@ import (
 )
 
 type config struct {
-	NodeID      string
-	Port        int
-	BaseURL     string
-	CORSAllowed string
-	ZKAddr      string
-	ZKRoot      string
-	StoragePath string
+	NodeID           string
+	Port             int
+	BaseURL          string
+	CORSAllowed      string
+	ZKAddr           string
+	ZKRoot           string
+	StoragePath      string
+	SkewWarnMS       int64
+	SkewRejectMS     int64
+	MaxMessageAgeMS  int64
+	MaxFutureDriftMS int64
 }
 
 func main() {
@@ -67,10 +71,14 @@ func main() {
 	go runFollowerCatchUpLoop(logger, coord, store, replClient, recoveryStopCh)
 
 	handler := api.NewHandler(api.Config{
-		NodeID:      cfg.NodeID,
-		CORSAllowed: cfg.CORSAllowed,
-		ZKAddr:      cfg.ZKAddr,
-		StoragePath: cfg.StoragePath,
+		NodeID:           cfg.NodeID,
+		CORSAllowed:      cfg.CORSAllowed,
+		ZKAddr:           cfg.ZKAddr,
+		StoragePath:      cfg.StoragePath,
+		SkewWarnMS:       cfg.SkewWarnMS,
+		SkewRejectMS:     cfg.SkewRejectMS,
+		MaxMessageAgeMS:  cfg.MaxMessageAgeMS,
+		MaxFutureDriftMS: cfg.MaxFutureDriftMS,
 		RequestShutdown: func(reason string) {
 			select {
 			case shutdownCh <- reason:
@@ -217,13 +225,17 @@ func loadConfig() config {
 	}
 
 	return config{
-		NodeID:      getEnv("NODE_ID", "A"),
-		Port:        port,
-		BaseURL:     baseURL,
-		CORSAllowed: getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173"),
-		ZKAddr:      getEnv("ZK_ADDR", "localhost:2181"),
-		ZKRoot:      getEnv("ZK_ROOT", "/quorapay"),
-		StoragePath: getEnv("STORAGE_PATH", "./data/nodeA/ledger.db"),
+		NodeID:           getEnv("NODE_ID", "A"),
+		Port:             port,
+		BaseURL:          baseURL,
+		CORSAllowed:      getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173"),
+		ZKAddr:           getEnv("ZK_ADDR", "localhost:2181"),
+		ZKRoot:           getEnv("ZK_ROOT", "/quorapay"),
+		StoragePath:      getEnv("STORAGE_PATH", "./data/nodeA/ledger.db"),
+		SkewWarnMS:       getEnvInt64("SKEW_WARN_MS", 300),
+		SkewRejectMS:     getEnvInt64("SKEW_REJECT_MS", 500),
+		MaxMessageAgeMS:  getEnvInt64("MAX_MESSAGE_AGE_MS", 2000),
+		MaxFutureDriftMS: getEnvInt64("MAX_FUTURE_DRIFT_MS", 500),
 	}
 }
 
@@ -245,5 +257,18 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 
+	return parsed
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
 	return parsed
 }
