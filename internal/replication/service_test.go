@@ -81,7 +81,7 @@ func baseEntry() LogEntry {
 		PaymentID: "pay-1",
 		Amount:    10,
 		Currency:  "USD",
-		Status:    StatusCommitted,
+		Status:    StatusPending,
 	}
 }
 

@@ -8,7 +8,7 @@ type AppendEntriesRequest struct {
 	Entries  []LogEntry `json:"entries"`
 }
 
-// Validate performs basic structural validation for an append request.
+// Validate checks append request shape.
 func (r AppendEntriesRequest) Validate() error {
 	if r.LeaderID == "" {
 		return fmt.Errorf("leader_id is required")
@@ -29,13 +29,7 @@ func (r AppendEntriesRequest) Validate() error {
 	return nil
 }
 
-// AppendEntriesResponse is returned by a follower after receiving an append
-// request from the leader.
-//
-// Success indicates whether the append was accepted.
-// Term allows the leader to notice if the follower is already on a newer term.
-// LastLogIndex helps the leader understand the follower's current replicated state.
-// Message provides optional debugging/context information.
+// AppendEntriesResponse is a follower ACK for append.
 type AppendEntriesResponse struct {
 	Success      bool   `json:"success"`
 	Term         int64  `json:"term"`
@@ -43,7 +37,7 @@ type AppendEntriesResponse struct {
 	Message      string `json:"message,omitempty"`
 }
 
-// Validate performs basic structural validation for an append response.
+// Validate checks append response shape.
 func (r AppendEntriesResponse) Validate() error {
 	if r.Term < 0 {
 		return fmt.Errorf("term cannot be negative")
@@ -54,40 +48,35 @@ func (r AppendEntriesResponse) Validate() error {
 	return nil
 }
 
-// CommitRequest is sent by the leader to followers after quorum is reached,
-// instructing them to transition a replicated entry to COMMITTED state.
-//
-// For now, LogIndex is enough because the log index uniquely identifies the
-// target entry in the replicated ledger.
+// CommitRequest asks followers to mark an entry committed.
 type CommitRequest struct {
 	LogIndex  int64  `json:"log_index"`
 	PaymentID string `json:"payment_id"`
 }
 
-// Validate performs basic structural validation for a commit request.
+// Validate checks commit request shape.
 func (r CommitRequest) Validate() error {
 	if r.LogIndex < 0 {
 		return fmt.Errorf("log_index cannot be negative")
 	}
+	if r.PaymentID == "" {
+		return fmt.Errorf("payment_id is required")
+	}
 	return nil
 }
 
-// CommitResponse is returned by a follower after processing a commit request.
+// CommitResponse is a follower ACK for commit.
 type CommitResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
 }
 
-// CatchUpRequest is reserved for recovery/rejoin scenarios, where a node asks
-// for entries after a known log index.
-//
-// This is useful for Member 1 later and keeping it here early avoids breaking
-// protocol changes later.
+// CatchUpRequest asks for entries after a known log index.
 type CatchUpRequest struct {
 	FromLogIndex int64 `json:"from_log_index"`
 }
 
-// Validate performs basic structural validation for a catch-up request.
+// Validate checks catch-up request shape.
 func (r CatchUpRequest) Validate() error {
 	if r.FromLogIndex < 0 {
 		return fmt.Errorf("from_log_index cannot be negative")
@@ -95,7 +84,7 @@ func (r CatchUpRequest) Validate() error {
 	return nil
 }
 
-// CatchUpResponse returns replicated entries starting after the requested index.
+// CatchUpResponse returns entries for a catch-up request.
 type CatchUpResponse struct {
 	Success bool       `json:"success"`
 	Entries []LogEntry `json:"entries,omitempty"`

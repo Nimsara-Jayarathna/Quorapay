@@ -2,7 +2,7 @@ package replication
 
 import "fmt"
 
-// Status represents the lifecycle state of a replicated payment entry.
+// Status is the lifecycle state of a replicated entry.
 type Status string
 
 const (
@@ -11,7 +11,7 @@ const (
 	StatusFailed    Status = "FAILED"
 )
 
-// IsValid checks whether the status is one of the supported values.
+// IsValid reports whether the status is supported.
 func (s Status) IsValid() bool {
 	switch s {
 	case StatusPending, StatusCommitted, StatusFailed:
@@ -21,39 +21,32 @@ func (s Status) IsValid() bool {
 	}
 }
 
-// String returns the string representation of the status.
+// String returns the status as text.
 func (s Status) String() string {
 	return string(s)
 }
 
-// LogEntry is the shared replicated ledger record.
-//
-// Ownership notes:
-// - Member 2 owns the replicated payment/ledger shape.
-// - Member 4 depends on LogIndex and Term for coordination/validation.
-// - Member 3 may later use PhysicalTime and LogicalTime.
-// - Member 1 may later use LogIndex for replay and catch-up.
+// LogEntry is the replicated ledger record.
 type LogEntry struct {
-	// Global ordering / coordination metadata
+	// Ordering metadata.
 	LogIndex int64  `json:"log_index"`
 	Term     int64  `json:"term"`
 	LeaderID string `json:"leader_id"`
 
-	// Payment payload
+	// Payment payload.
 	PaymentID string  `json:"payment_id"`
 	Amount    float64 `json:"amount"`
 	Currency  string  `json:"currency"`
 
-	// Replication / visibility state
+	// Replication state.
 	Status Status `json:"status"`
 
-	// Optional timing fields for future time-sync integration
+	// Optional time-sync fields.
 	PhysicalTime int64 `json:"physical_time"`
 	LogicalTime  int64 `json:"logical_time"`
 }
 
-// Validate performs basic structural validation for the replicated entry.
-// This is intentionally lightweight for now and can be extended later.
+// Validate checks entry shape.
 func (e LogEntry) Validate() error {
 	if e.LogIndex < 0 {
 		return fmt.Errorf("log_index cannot be negative")
@@ -76,7 +69,7 @@ func (e LogEntry) Validate() error {
 	return nil
 }
 
-// IsZero reports whether the entry is effectively empty/uninitialized.
+// IsZero reports whether the entry is empty.
 func (e LogEntry) IsZero() bool {
 	return e.LogIndex == 0 &&
 		e.Term == 0 &&
@@ -87,16 +80,14 @@ func (e LogEntry) IsZero() bool {
 		e.Status == ""
 }
 
-// PaymentRequest is the public client request body for POST /pay.
-// This is not the replicated record itself; it is the external input that
-// the leader converts into a LogEntry.
+// PaymentRequest is the public input for POST /pay.
 type PaymentRequest struct {
 	PaymentID string  `json:"payment_id"`
 	Amount    float64 `json:"amount"`
 	Currency  string  `json:"currency"`
 }
 
-// Validate performs basic validation for an incoming payment request.
+// Validate checks payment request shape.
 func (r PaymentRequest) Validate() error {
 	if r.PaymentID == "" {
 		return fmt.Errorf("payment_id is required")
@@ -110,26 +101,23 @@ func (r PaymentRequest) Validate() error {
 	return nil
 }
 
-// PaymentResponse is the public response body for POST /pay.
-// This is shaped for frontend/API use and can be refined later when the
-// endpoint is implemented.
+// PaymentResponse is the public output for POST /pay.
 type PaymentResponse struct {
 	Status    string `json:"status"`
 	PaymentID string `json:"payment_id"`
 
-	// The leader may return these when useful for clients or debugging.
-	LogIndex int64  `json:"log_index,omitempty"`
-	Term     int64  `json:"term,omitempty"`
-	LeaderID string `json:"leader_id,omitempty"`
+	// Optional leader metadata.
+	LogIndex  int64  `json:"log_index,omitempty"`
+	Term      int64  `json:"term,omitempty"`
+	LeaderID  string `json:"leader_id,omitempty"`
 	LeaderURL string `json:"leader_url,omitempty"`
 
 	Message string `json:"message,omitempty"`
 }
 
-// ReplicationResult is a small internal summary that can be useful later
-// when implementing quorum logic.
+// ReplicationResult is a small quorum summary.
 type ReplicationResult struct {
-	RequiredAcks int `json:"required_acks"`
-	ReceivedAcks int `json:"received_acks"`
+	RequiredAcks int  `json:"required_acks"`
+	ReceivedAcks int  `json:"received_acks"`
 	Committed    bool `json:"committed"`
 }
