@@ -112,6 +112,17 @@ func (h *handler) internalAppendHandler(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+		if entry.LogicalTime < 0 {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "logical_time cannot be negative",
+			})
+			return
+		}
+
+		// Lamport receive rule: local = max(local, remote) + 1
+		entry.LogicalTime = int64(h.lamportClock.Receive(uint64(entry.LogicalTime)))
 
 		if err := h.ledger.AppendPending(r.Context(), entry); err != nil {
 			if errors.Is(err, storage.ErrDuplicatePaymentID) {

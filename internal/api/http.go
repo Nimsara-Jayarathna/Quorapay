@@ -13,6 +13,7 @@ import (
 	"quorapay/internal/coordination"
 	"quorapay/internal/replication"
 	"quorapay/internal/storage"
+	"quorapay/internal/timesync"
 )
 
 const receivedByHeader = "X-Quorapay-Received-By"
@@ -52,6 +53,7 @@ type handler struct {
 	ledger           LedgerStore
 	replicator       Replicator
 	leaderHTTPClient *http.Client
+	lamportClock     *timesync.LamportClock
 }
 
 func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Status }, ledger LedgerStore, replicator ...Replicator) http.Handler {
@@ -77,6 +79,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		ledger:           ledger,
 		replicator:       repl,
 		leaderHTTPClient: leaderClient,
+		lamportClock:     timesync.NewLamportClock(),
 	}
 
 	mux := http.NewServeMux()
@@ -161,6 +164,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		Currency:     req.Currency,
 		Status:       replication.StatusPending,
 		PhysicalTime: time.Now().UnixNano(),
+		LogicalTime:  int64(h.lamportClock.Send()),
 	}
 
 	followerURLs, err := h.coordinator.GetFollowerURLs()

@@ -46,6 +46,7 @@ func (s *stubLedgerStore) AppendPending(_ context.Context, entry replication.Log
 		Amount:      entry.Amount,
 		Currency:    entry.Currency,
 		Status:      replication.StatusPending.String(),
+		LogicalTime: entry.LogicalTime,
 		ReceivedBy:  entry.ReceivedBy,
 		ProcessedBy: entry.LeaderID,
 	}
@@ -236,6 +237,39 @@ func TestInternalCatchUpLeaderReturnsCommittedEntries(t *testing.T) {
 	}
 	if len(out.Entries) != 1 || out.Entries[0].PaymentID != "pay-2" {
 		t.Fatalf("entries = %+v, want only pay-2", out.Entries)
+	}
+}
+
+func TestInternalAppendUpdatesLamportLogicalTime(t *testing.T) {
+	store := newStubLedgerStore()
+	h := NewHandler(Config{NodeID: "B", CORSAllowed: "*"}, stubStatusSource{}, store)
+
+	body := replication.AppendEntriesRequest{
+		LeaderID: "A",
+		Term:     1,
+		Entries: []replication.LogEntry{{
+			LogIndex:    20,
+			Term:        1,
+			LeaderID:    "A",
+			PaymentID:   "pay-lamport",
+			Amount:      5,
+			Currency:    "USD",
+			Status:      replication.StatusPending,
+			LogicalTime: 10,
+		}},
+	}
+
+	resp := performJSONRequest(t, h, http.MethodPost, "/internal/append", body)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	got, ok := store.payments["pay-lamport"]
+	if !ok {
+		t.Fatalf("payment not stored")
+	}
+	if got.LogicalTime <= 10 {
+		t.Fatalf("logical_time = %d, want > 10 (receive rule)", got.LogicalTime)
 	}
 }
 
