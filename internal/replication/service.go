@@ -130,6 +130,39 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 	}
 
 	result.Committed = true
+	commitReq := CommitRequest{
+		LogIndex:  entry.LogIndex,
+		PaymentID: entry.PaymentID,
+	}
+
+	for i, baseURL := range followerBaseURLs {
+		resp, err := s.transport.CommitToFollower(ctx, baseURL, commitReq)
+		if err != nil {
+			result.FollowerResults[i].Error = mergeFollowerError(result.FollowerResults[i].Error, fmt.Sprintf("commit: %s", err.Error()))
+			continue
+		}
+
+		if resp.Success {
+			result.FollowerResults[i].CommitAcknowledged = true
+			continue
+		}
+
+		message := resp.Message
+		if message == "" {
+			message = "commit not acknowledged"
+		}
+		result.FollowerResults[i].Error = mergeFollowerError(result.FollowerResults[i].Error, "commit: "+message)
+	}
 
 	return result, nil
+}
+
+func mergeFollowerError(existing string, next string) string {
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + " | " + next
 }

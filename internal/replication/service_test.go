@@ -31,8 +31,12 @@ func (s *stubLocalLedger) CommitByPaymentID(_ context.Context, paymentID string)
 type stubTransport struct {
 	appendResults map[string]AppendEntriesResponse
 	appendErrors  map[string]error
+	commitResults map[string]CommitResponse
+	commitErrors  map[string]error
 	appendCalls   int
+	commitCalls   int
 	lastRequests  map[string]AppendEntriesRequest
+	lastCommits   map[string]CommitRequest
 }
 
 func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL string, req AppendEntriesRequest) (AppendEntriesResponse, error) {
@@ -52,8 +56,21 @@ func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL stri
 	return AppendEntriesResponse{Success: false, Message: "no response configured"}, nil
 }
 
-func (*stubTransport) CommitToFollower(context.Context, string, CommitRequest) (CommitResponse, error) {
-	panic("CommitToFollower should not be called in phase 4.3")
+func (s *stubTransport) CommitToFollower(_ context.Context, followerBaseURL string, req CommitRequest) (CommitResponse, error) {
+	s.commitCalls++
+	if s.lastCommits == nil {
+		s.lastCommits = make(map[string]CommitRequest)
+	}
+	s.lastCommits[followerBaseURL] = req
+
+	if err, ok := s.commitErrors[followerBaseURL]; ok {
+		return CommitResponse{}, err
+	}
+	if resp, ok := s.commitResults[followerBaseURL]; ok {
+		return resp, nil
+	}
+
+	return CommitResponse{Success: false, Message: "no commit response configured"}, nil
 }
 
 func baseEntry() LogEntry {
@@ -220,6 +237,9 @@ func TestReplicationService_ReplicateWithQuorum_BothFollowersFailNoQuorum(t *tes
 	if ledger.commitCalls != 0 {
 		t.Fatalf("CommitByPaymentID calls = %d, want 0", ledger.commitCalls)
 	}
+	if transport.commitCalls != 0 {
+		t.Fatalf("CommitToFollower calls = %d, want 0", transport.commitCalls)
+	}
 }
 
 func TestReplicationService_ReplicateWithQuorum_MixedFollowerOutcomesCountAcks(t *testing.T) {
@@ -228,6 +248,11 @@ func TestReplicationService_ReplicateWithQuorum_MixedFollowerOutcomesCountAcks(t
 		appendResults: map[string]AppendEntriesResponse{
 			"http://node-b:8002": {Success: true},
 			"http://node-c:8003": {Success: false, Message: "stale term"},
+			"http://node-d:8004": {Success: true},
+		},
+		commitResults: map[string]CommitResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: true},
 			"http://node-d:8004": {Success: true},
 		},
 	}
@@ -283,6 +308,10 @@ func TestReplicationService_ReplicateWithQuorum_QuorumReachedCommitsLocally(t *t
 			"http://node-b:8002": {Success: true},
 			"http://node-c:8003": {Success: false, Message: "reject"},
 		},
+		commitResults: map[string]CommitResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: true},
+		},
 	}
 	svc := NewReplicationService(ledger, transport)
 
@@ -329,6 +358,9 @@ func TestReplicationService_ReplicateWithQuorum_QuorumNotReachedSkipsLocalCommit
 	if ledger.commitCalls != 0 {
 		t.Fatalf("CommitByPaymentID calls = %d, want 0", ledger.commitCalls)
 	}
+	if transport.commitCalls != 0 {
+		t.Fatalf("CommitToFollower calls = %d, want 0", transport.commitCalls)
+	}
 }
 
 func TestReplicationService_ReplicateWithQuorum_LocalCommitFailureAfterQuorumReturnsError(t *testing.T) {
@@ -361,6 +393,110 @@ func TestReplicationService_ReplicateWithQuorum_LocalCommitFailureAfterQuorumRet
 	}
 	if ledger.commitCalls != 1 {
 		t.Fatalf("CommitByPaymentID calls = %d, want 1", ledger.commitCalls)
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_QuorumReachedSendsFollowerCommits(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "append rejected"},
+		},
+		commitResults: map[string]CommitResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: true},
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+	followers := []string{"http://node-b:8002", "http://node-c:8003"}
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), followers)
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if !result.QuorumReached {
+		t.Fatalf("QuorumReached = false, want true")
+	}
+	if !result.Committed {
+		t.Fatalf("Committed = false, want true")
+	}
+	if transport.commitCalls != len(followers) {
+		t.Fatalf("CommitToFollower calls = %d, want %d", transport.commitCalls, len(followers))
+	}
+	for _, follower := range followers {
+		req, ok := transport.lastCommits[follower]
+		if !ok {
+			t.Fatalf("missing commit request for follower %s", follower)
+		}
+		if req.PaymentID != "pay-1" {
+			t.Fatalf("commit payment id for %s = %q, want %q", follower, req.PaymentID, "pay-1")
+		}
+		if req.LogIndex != 1 {
+			t.Fatalf("commit log index for %s = %d, want 1", follower, req.LogIndex)
+		}
+	}
+	if !result.FollowerResults[0].CommitAcknowledged || !result.FollowerResults[1].CommitAcknowledged {
+		t.Fatalf("expected follower commit acknowledgements to be true")
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_QuorumNotReachedSendsNoFollowerCommits(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendErrors: map[string]error{
+			"http://node-b:8002": errors.New("down"),
+			"http://node-c:8003": errors.New("down"),
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002", "http://node-c:8003"})
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if result.QuorumReached {
+		t.Fatalf("QuorumReached = true, want false")
+	}
+	if transport.commitCalls != 0 {
+		t.Fatalf("CommitToFollower calls = %d, want 0", transport.commitCalls)
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_FollowerCommitFailureRecordedNonFatal(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "append rejected"},
+		},
+		commitResults: map[string]CommitResponse{
+			"http://node-b:8002": {Success: true},
+		},
+		commitErrors: map[string]error{
+			"http://node-c:8003": errors.New("commit timeout"),
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002", "http://node-c:8003"})
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if !result.QuorumReached || !result.Committed {
+		t.Fatalf("expected quorum and local commit success")
+	}
+	if transport.commitCalls != 2 {
+		t.Fatalf("CommitToFollower calls = %d, want 2", transport.commitCalls)
+	}
+	if !result.FollowerResults[0].CommitAcknowledged {
+		t.Fatalf("follower 0 commit ack = false, want true")
+	}
+	if result.FollowerResults[1].Error == "" || !strings.Contains(result.FollowerResults[1].Error, "commit") {
+		t.Fatalf("follower 1 error = %q, expected commit error context", result.FollowerResults[1].Error)
 	}
 }
 
