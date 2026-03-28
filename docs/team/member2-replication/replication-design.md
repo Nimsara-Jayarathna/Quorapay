@@ -201,10 +201,12 @@ This approach is well-suited for financial systems where **data correctness is m
 ### Storage layer
 
 - `SQLiteStore` now includes `AppendPending`, `CommitByPaymentID`, `GetPaymentByID`, `ExistsByPaymentID`, and `ListCommittedAfter`.
+- Standardized SQLite schema handles deduplication and features a composite index on `(logical_time, log_index, id)` to optimize `ListPayments` reads.
 - Sentinel errors added: `ErrDuplicatePaymentID` and `ErrPaymentNotFound`.
 
 ### Replication protocol
 
+- `LogEntry.Validate()` strictly enforces `leader_id` presence for upstream tracking.
 - `CommitRequest` now carries both `payment_id` and `log_index`.
 - `CommitRequest.Validate()` now requires `payment_id` (in addition to existing index checks).
 
@@ -216,7 +218,7 @@ This approach is well-suited for financial systems where **data correctness is m
 ### Replication service
 
 - `ReplicateWithQuorum` implemented end-to-end: local append, **concurrent** follower append fan-out, quorum decision, local commit on quorum, and follower commit fan-out (best effort).
-- The concurrent follower fan-out uses goroutines and a buffered channel to prevent a slow or failed follower from blocking the quorum decision.
+- The concurrent follower fan-out runs completely unlocked in independent goroutines, leveraging parallelism without network serializations or locking bottlenecks preventing immediate quorum decisions.
 - Service contracts are defined via `LocalLedger` and `FollowerTransport` interfaces.
 
 ### Coordination accessors
@@ -227,7 +229,7 @@ This approach is well-suited for financial systems where **data correctness is m
 ### API layer
 
 - `Coordinator` and `Replicator` interfaces are wired in `internal/api` for handler-level orchestration.
-- `POST /pay` leader flow is implemented: leader check/redirect, dedup check, log index assignment, quorum replication call, and response handling.
+- `POST /pay` leader flow handles redirects, stateful dedup processing (returning HTTP 200 for `COMMITTED` records and HTTP 409 for safely rejected `PENDING` retries), index assignments, and quorum propagation dynamically.
 - Follower replication endpoints are implemented: `POST /internal/append` and `POST /internal/commit`.
 - `GET /internal/catchup` endpoint is implemented — serves committed entries after a given `from_log_index` to rejoining followers. Only responds when the node is the current leader.
 - Follower-to-leader forwarding (`forwardPayToLeader`) replaces the original HTTP 307 redirect — the follower proxies the request internally to the leader and returns the response directly to the client, avoiding browser CORS issues.
@@ -246,9 +248,9 @@ This approach is well-suited for financial systems where **data correctness is m
 
 ### What remains
 
-Member 2 coding work is complete. All planned replication and consistency features are implemented and verified:
+Coding work is complete. All planned replication and consistency features are implemented and verified:
 
-- 48/48 unit tests passing across storage, replication, and API packages
+- 53/53 unit tests passing across storage, replication, and API packages
 - 10/11 integration checks passing on a live 3-node cluster
 - Quorum commit confirmed working with one follower down (140ms response time)
 - Catch-up endpoint verified serving filtered entries correctly
