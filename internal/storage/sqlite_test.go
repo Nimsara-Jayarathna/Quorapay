@@ -186,6 +186,62 @@ func TestSQLiteStore_ExistsByPaymentIDWorks(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_ListPaymentsOrderedByLogicalTime(t *testing.T) {
+	store := newTestStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+
+	entries := []replication.LogEntry{
+		{
+			LogIndex:    1,
+			Term:        1,
+			LeaderID:    "A",
+			PaymentID:   "pay-order-1",
+			Amount:      10,
+			Currency:    "USD",
+			Status:      replication.StatusPending,
+			LogicalTime: 30,
+		},
+		{
+			LogIndex:    2,
+			Term:        1,
+			LeaderID:    "A",
+			PaymentID:   "pay-order-2",
+			Amount:      10,
+			Currency:    "USD",
+			Status:      replication.StatusPending,
+			LogicalTime: 10,
+		},
+		{
+			LogIndex:    3,
+			Term:        1,
+			LeaderID:    "A",
+			PaymentID:   "pay-order-3",
+			Amount:      10,
+			Currency:    "USD",
+			Status:      replication.StatusPending,
+			LogicalTime: 20,
+		},
+	}
+
+	for _, entry := range entries {
+		if err := store.AppendPending(context.Background(), entry); err != nil {
+			t.Fatalf("AppendPending(%s) error = %v", entry.PaymentID, err)
+		}
+	}
+
+	items, err := store.ListPayments(context.Background())
+	if err != nil {
+		t.Fatalf("ListPayments() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("len(items) = %d, want 3", len(items))
+	}
+
+	if items[0].PaymentID != "pay-order-2" || items[1].PaymentID != "pay-order-3" || items[2].PaymentID != "pay-order-1" {
+		t.Fatalf("unexpected order by logical_time: got %q, %q, %q", items[0].PaymentID, items[1].PaymentID, items[2].PaymentID)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

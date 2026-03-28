@@ -72,7 +72,7 @@ func (s *SQLiteStore) ListPayments(ctx context.Context) ([]Payment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
 		FROM payments
-		ORDER BY id ASC
+		ORDER BY logical_time ASC, log_index ASC, id ASC
 	`)
 	if err != nil {
 		return nil, err
