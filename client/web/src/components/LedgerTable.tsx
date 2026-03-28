@@ -55,13 +55,15 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
               <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">received_by</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-600">processed_by</th>
               <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
             {items.length === 0 ? (
               <tr>
-                <td className="px-3 py-4 text-slate-500" colSpan={6}>
+                <td className="px-3 py-4 text-slate-500" colSpan={8}>
                   No ledger entries to display.
                 </td>
               </tr>
@@ -73,6 +75,8 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
                   <td className="px-3 py-2 text-slate-700">{item.amount}</td>
                   <td className="px-3 py-2 text-slate-700">{item.currency}</td>
                   <td className="px-3 py-2 text-slate-700">{item.status}</td>
+                  <td className="px-3 py-2 text-slate-700">{item.received_by ?? "-"}</td>
+                  <td className="px-3 py-2 text-slate-700">{item.processed_by ?? "-"}</td>
                   <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
                 </tr>
               ))

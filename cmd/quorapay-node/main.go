@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"quorapay/internal/api"
 	"quorapay/internal/coordination"
+	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
 
@@ -58,6 +60,12 @@ func main() {
 		}
 	}()
 
+	replClient := replication.NewHTTPClient(nil)
+	replService := replication.NewReplicationService(store, replClient)
+	recoveryStopCh := make(chan struct{})
+	defer close(recoveryStopCh)
+	go runFollowerCatchUpLoop(logger, coord, store, replClient, recoveryStopCh)
+
 	handler := api.NewHandler(api.Config{
 		NodeID:      cfg.NodeID,
 		CORSAllowed: cfg.CORSAllowed,
@@ -69,7 +77,7 @@ func main() {
 			default:
 			}
 		},
-	}, coord, store)
+	}, coord, store, replService)
 
 	server := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
@@ -103,6 +111,102 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Printf("http server shutdown failed: %v", err)
 	}
+}
+
+func runFollowerCatchUpLoop(
+	logger *log.Logger,
+	coord interface {
+		CurrentStatus() coordination.Status
+		MarkRecoveryCaughtUp()
+		MarkRecoveryCatchUpFailed(string)
+	},
+	store interface {
+		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
+		AppendPending(context.Context, replication.LogEntry) error
+		CommitByPaymentID(context.Context, string) error
+	},
+	client *replication.HTTPClient,
+	stopCh <-chan struct{},
+) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+		}
+
+		status := coord.CurrentStatus()
+		if status.Role == coordination.RoleLeader || strings.TrimSpace(status.LeaderURL) == "" {
+			if status.Role == coordination.RoleLeader {
+				coord.MarkRecoveryCaughtUp()
+			}
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		lastCommittedIndex, err := readLocalCommittedHead(ctx, store)
+		if err != nil {
+			cancel()
+			logger.Printf("catch-up skipped: failed to read local head: %v", err)
+			continue
+		}
+
+		resp, err := client.CatchUpFromLeader(ctx, status.LeaderURL, lastCommittedIndex)
+		cancel()
+		if err != nil {
+			coord.MarkRecoveryCatchUpFailed(err.Error())
+			logger.Printf("catch-up request failed from leader=%s: %v", status.LeaderURL, err)
+			continue
+		}
+		coord.MarkRecoveryCaughtUp()
+		if !resp.Success || len(resp.Entries) == 0 {
+			continue
+		}
+
+		applied := 0
+		for _, entry := range resp.Entries {
+			entry.Status = replication.StatusPending
+			if strings.TrimSpace(entry.ReceivedBy) == "" {
+				entry.ReceivedBy = entry.LeaderID
+			}
+			if err := store.AppendPending(context.Background(), entry); err != nil && !errors.Is(err, storage.ErrDuplicatePaymentID) {
+				coord.MarkRecoveryCatchUpFailed(err.Error())
+				logger.Printf("catch-up append failed payment_id=%s: %v", entry.PaymentID, err)
+				continue
+			}
+			if err := store.CommitByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
+				coord.MarkRecoveryCatchUpFailed(err.Error())
+				logger.Printf("catch-up commit failed payment_id=%s: %v", entry.PaymentID, err)
+				continue
+			}
+			applied++
+		}
+		if applied > 0 {
+			logger.Printf("catch-up applied %d entries from leader=%s", applied, status.LeaderURL)
+		}
+	}
+}
+
+func readLocalCommittedHead(
+	ctx context.Context,
+	store interface {
+		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
+	},
+) (int64, error) {
+	items, err := store.ListCommittedAfter(ctx, 0)
+	if err != nil {
+		return 0, err
+	}
+	var max int64
+	for _, item := range items {
+		if item.LogIndex > max {
+			max = item.LogIndex
+		}
+	}
+	return max, nil
 }
 
 func loadConfig() config {

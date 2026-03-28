@@ -1,9 +1,14 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
+	"quorapay/internal/coordination"
+	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
 
@@ -63,4 +68,185 @@ func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(150 * time.Millisecond)
 		h.cfg.RequestShutdown("requested by /admin/shutdown")
 	}()
+}
+
+func (h *handler) internalAppendHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	var req replication.AppendEntriesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+			Success: false,
+			Message: "invalid request body",
+		})
+		return
+	}
+
+	if len(req.Entries) == 0 {
+		writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+			Success: false,
+			Term:    req.Term,
+			Message: "entries cannot be empty",
+		})
+		return
+	}
+
+	var lastIndex int64
+	for _, entry := range req.Entries {
+		if entry.PaymentID == "" {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "payment_id is required",
+			})
+			return
+		}
+		if entry.LogIndex < 0 {
+			writeJSON(w, http.StatusBadRequest, replication.AppendEntriesResponse{
+				Success: false,
+				Term:    req.Term,
+				Message: "log_index cannot be negative",
+			})
+			return
+		}
+
+		if err := h.ledger.AppendPending(r.Context(), entry); err != nil {
+			if errors.Is(err, storage.ErrDuplicatePaymentID) {
+				lastIndex = entry.LogIndex
+				continue
+			}
+
+			writeJSON(w, http.StatusInternalServerError, replication.AppendEntriesResponse{
+				Success:      false,
+				Term:         req.Term,
+				LastLogIndex: lastIndex,
+				Message:      err.Error(),
+			})
+			return
+		}
+
+		lastIndex = entry.LogIndex
+	}
+
+	writeJSON(w, http.StatusOK, replication.AppendEntriesResponse{
+		Success:      true,
+		Term:         req.Term,
+		LastLogIndex: lastIndex,
+		Message:      "append applied",
+	})
+}
+
+func (h *handler) internalCommitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	var req replication.CommitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, replication.CommitResponse{
+			Success: false,
+			Message: "invalid request body",
+		})
+		return
+	}
+
+	if req.PaymentID == "" {
+		writeJSON(w, http.StatusBadRequest, replication.CommitResponse{
+			Success: false,
+			Message: "payment_id is required",
+		})
+		return
+	}
+
+	err := h.ledger.CommitByPaymentID(r.Context(), req.PaymentID)
+	if err != nil {
+		if errors.Is(err, storage.ErrPaymentNotFound) {
+			writeJSON(w, http.StatusNotFound, replication.CommitResponse{
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusInternalServerError, replication.CommitResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, replication.CommitResponse{
+		Success: true,
+		Message: "commit applied",
+	})
+}
+
+func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	if h.coordinator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, replication.CatchUpResponse{
+			Success: false,
+			Message: "coordinator is not configured",
+		})
+		return
+	}
+
+	status := h.coordinator.CurrentStatus()
+	if status.Role != coordination.RoleLeader {
+		writeJSON(w, http.StatusServiceUnavailable, replication.CatchUpResponse{
+			Success: false,
+			Message: "catch-up source must be leader",
+		})
+		return
+	}
+
+	fromRaw := r.URL.Query().Get("from_log_index")
+	if fromRaw == "" {
+		fromRaw = "0"
+	}
+	fromLogIndex, err := strconv.ParseInt(fromRaw, 10, 64)
+	if err != nil || fromLogIndex < 0 {
+		writeJSON(w, http.StatusBadRequest, replication.CatchUpResponse{
+			Success: false,
+			Message: "from_log_index must be a non-negative integer",
+		})
+		return
+	}
+
+	items, err := h.ledger.ListCommittedAfter(r.Context(), fromLogIndex)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, replication.CatchUpResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	entries := make([]replication.LogEntry, 0, len(items))
+	for _, p := range items {
+		entries = append(entries, replication.LogEntry{
+			LogIndex:     p.LogIndex,
+			LeaderID:     p.ProcessedBy,
+			ReceivedBy:   p.ReceivedBy,
+			PaymentID:    p.PaymentID,
+			Amount:       p.Amount,
+			Currency:     p.Currency,
+			Status:       replication.StatusCommitted,
+			PhysicalTime: p.PhysicalTime,
+			LogicalTime:  p.LogicalTime,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, replication.CatchUpResponse{
+		Success: true,
+		Entries: entries,
+	})
 }
