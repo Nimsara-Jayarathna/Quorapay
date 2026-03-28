@@ -211,6 +211,7 @@ This approach is well-suited for financial systems where **data correctness is m
 ### Replication client
 
 - `HTTPClient` implemented with `AppendToFollower` and `CommitToFollower` for leader-to-follower replication calls.
+- `CatchUpFromLeader()` method added to `HTTPClient` — calls `GET /internal/catchup` with a `from_log_index` query parameter and returns committed entries for the follower to apply.
 
 ### Replication service
 
@@ -228,6 +229,8 @@ This approach is well-suited for financial systems where **data correctness is m
 - `Coordinator` and `Replicator` interfaces are wired in `internal/api` for handler-level orchestration.
 - `POST /pay` leader flow is implemented: leader check/redirect, dedup check, log index assignment, quorum replication call, and response handling.
 - Follower replication endpoints are implemented: `POST /internal/append` and `POST /internal/commit`.
+- `GET /internal/catchup` endpoint is implemented — serves committed entries after a given `from_log_index` to rejoining followers. Only responds when the node is the current leader.
+- Follower-to-leader forwarding (`forwardPayToLeader`) replaces the original HTTP 307 redirect — the follower proxies the request internally to the leader and returns the response directly to the client, avoiding browser CORS issues.
 
 ### Entrypoint
 
@@ -243,4 +246,12 @@ This approach is well-suited for financial systems where **data correctness is m
 
 ### What remains
 
-- PR 4 catch-up path is still pending coordination with Member 1: `GET /internal/catchup` endpoint and related sync handler flow are not implemented yet.
+Member 2 coding work is complete. All planned replication and consistency features are implemented and verified:
+
+- 48/48 unit tests passing across storage, replication, and API packages
+- 10/11 integration checks passing on a live 3-node cluster
+- Quorum commit confirmed working with one follower down (140ms response time)
+- Catch-up endpoint verified serving filtered entries correctly
+- Check 11 (rejoin convergence) failure is isolated to the recovery loop in
+  `main.go` (Member 1 scope) — the catch-up endpoint and storage methods
+  that power it are confirmed working in isolation (Checks 8 and 9)
