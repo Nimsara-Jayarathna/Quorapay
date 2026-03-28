@@ -24,7 +24,7 @@ function PaymentForm({
   onSubmit,
 }: PaymentFormProps) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="h-full rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="mb-4 text-lg font-medium text-slate-900">Create Payment</h2>
       <form className="grid gap-4" onSubmit={onSubmit}>
         <div className="grid gap-2">

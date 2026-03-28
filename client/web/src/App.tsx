@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 
 import LedgerTable from "./components/LedgerTable";
 import NodeStatusPanel from "./components/NodeStatusPanel";
+import NodeTabs from "./components/NodeTabs";
 import PaymentActionModal from "./components/PaymentActionModal";
 import PaymentForm from "./components/PaymentForm";
 import ShutdownConfirmModal from "./components/ShutdownConfirmModal";
@@ -47,6 +48,7 @@ function App() {
   const [nodeUrls, setNodeUrls] = useState<string[]>(initialNodeUrls);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
   const selectedNodeUrl = nodeUrls[selectedNodeIndex] ?? "";
+  const [nodeMetaByUrl, setNodeMetaByUrl] = useState<Record<string, { nodeId?: string; role?: string }>>({});
 
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -121,6 +123,21 @@ function App() {
       setStatusLoading(false);
     }
   }, [selectedNodeUrl]);
+
+  const refreshNodeMeta = useCallback(async () => {
+    const next: Record<string, { nodeId?: string; role?: string }> = {};
+    await Promise.all(
+      nodeUrls.map(async (url) => {
+        try {
+          const data = await fetchJson<NodeStatus>(`${url}/status`);
+          next[url] = { nodeId: data.node_id, role: data.role };
+        } catch {
+          next[url] = {};
+        }
+      }),
+    );
+    setNodeMetaByUrl(next);
+  }, [nodeUrls]);
 
   const refreshLedger = useCallback(async () => {
     if (!selectedNodeUrl) {
@@ -272,6 +289,14 @@ function App() {
   }, [refreshStatus, refreshLedger]);
 
   useEffect(() => {
+    void refreshNodeMeta();
+    const intervalId = window.setInterval(() => {
+      void refreshNodeMeta();
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshNodeMeta]);
+
+  useEffect(() => {
     void refreshTopology();
     const intervalId = window.setInterval(() => {
       void refreshTopology();
@@ -330,12 +355,16 @@ function App() {
         ) : null}
 
         <div className="space-y-6">
-          <div className="grid gap-6 xl:grid-cols-12">
+          <NodeTabs
+            nodeUrls={nodeUrls}
+            selectedNodeIndex={selectedNodeIndex}
+            onSelectNode={setSelectedNodeIndex}
+            nodeMetaByUrl={nodeMetaByUrl}
+          />
+
+          <div className="grid items-stretch gap-6 xl:grid-cols-12">
             <div className="xl:col-span-7">
               <NodeStatusPanel
-                nodeUrls={nodeUrls}
-                selectedNodeIndex={selectedNodeIndex}
-                onSelectNode={setSelectedNodeIndex}
                 status={status}
                 statusLoading={statusLoading}
                 shutdownLoading={shutdownLoading}
