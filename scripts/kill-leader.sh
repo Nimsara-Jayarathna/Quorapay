@@ -5,11 +5,14 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PID_DIR="$ROOT_DIR/data/pids"
 
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
 extract_field() {
 	echo "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
 }
 
-for port in 8001 8002 8003; do
+for spec in $(echo "$NODES" | tr ',' ' '); do
+	port=$(echo "$spec" | cut -d: -f2)
 	response=$(curl -fsS "http://localhost:$port/status" 2>/dev/null || true)
 	if [ -z "$response" ]; then
 		continue
@@ -40,5 +43,5 @@ for port in 8001 8002 8003; do
 	exit 0
 done
 
-echo "no reachable leader found on ports 8001-8003" >&2
+echo "no reachable leader found in NODES='$NODES'" >&2
 exit 1

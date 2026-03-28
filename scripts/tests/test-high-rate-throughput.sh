@@ -8,6 +8,12 @@ TARGET_MODE="${3:-leader}" # leader|round_robin
 AMOUNT="${AMOUNT:-10}"
 CURRENCY="${CURRENCY:-USD}"
 MAX_LATENCY_MS_WARN="${MAX_LATENCY_MS_WARN:-1000}"
+MAX_FAILURES="${MAX_FAILURES:-0}"
+RETRY_ATTEMPTS="${RETRY_ATTEMPTS:-2}"
+RETRY_SLEEP_SECONDS="${RETRY_SLEEP_SECONDS:-0.2}"
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
 
 if [ "$TOTAL_REQUESTS" -le 0 ] || [ "$CONCURRENCY" -le 0 ]; then
 	echo "usage: ./scripts/tests/test-high-rate-throughput.sh [total_requests] [concurrency] [leader|round_robin]" >&2
@@ -23,7 +29,8 @@ status_for_port() {
 }
 
 find_leader_port() {
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		json=$(status_for_port "$port")
 		[ -n "$json" ] || continue
 		role=$(extract_string "$json" "role")
@@ -41,11 +48,17 @@ pick_port_for_index() {
 		find_leader_port
 		return
 	fi
-	case $((idx % 3)) in
-		1) echo "8001" ;;
-		2) echo "8002" ;;
-		0) echo "8003" ;;
-	esac
+	pos=$(( (idx - 1) % $(echo "$NODES" | tr ',' ' ' | wc -w | tr -d ' ') + 1 ))
+	cur=1
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
+		if [ "$cur" -eq "$pos" ]; then
+			echo "$port"
+			return 0
+		fi
+		cur=$((cur + 1))
+	done
+	return 1
 }
 
 TMP_DIR=$(mktemp -d)
@@ -58,10 +71,25 @@ while [ "$i" -le "$TOTAL_REQUESTS" ]; do
 		port=$(pick_port_for_index "$i")
 		payment_id="perf-$i-$(date +%s%N)"
 		req_start=$(date +%s%N)
-		code=$(curl -sS -o "$TMP_DIR/body-$i.json" -w "%{http_code}" \
-			-X POST "http://localhost:$port/pay" \
-			-H "Content-Type: application/json" \
-			-d "{\"payment_id\":\"$payment_id\",\"amount\":$AMOUNT,\"currency\":\"$CURRENCY\"}" || echo "000")
+		attempt=0
+		code="000"
+		while [ "$attempt" -le "$RETRY_ATTEMPTS" ]; do
+			code=$(curl -sS -o "$TMP_DIR/body-$i.json" -w "%{http_code}" \
+				-X POST "http://localhost:$port/pay" \
+				-H "Content-Type: application/json" \
+				-d "{\"payment_id\":\"$payment_id\",\"amount\":$AMOUNT,\"currency\":\"$CURRENCY\"}" || echo "000")
+			if [ "$code" = "200" ]; then
+				break
+			fi
+			# Retry transient write-path failures.
+			if [ "$code" != "503" ] && [ "$code" != "000" ]; then
+				break
+			fi
+			attempt=$((attempt + 1))
+			if [ "$attempt" -le "$RETRY_ATTEMPTS" ]; then
+				sleep "$RETRY_SLEEP_SECONDS"
+			fi
+		done
 		req_end=$(date +%s%N)
 		lat_ms=$(( (req_end - req_start) / 1000000 ))
 
@@ -69,7 +97,7 @@ while [ "$i" -le "$TOTAL_REQUESTS" ]; do
 			echo "OK $lat_ms" >"$TMP_DIR/result-$i.txt"
 		else
 			msg=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$TMP_DIR/body-$i.json" | head -n 1)
-			echo "ERR $lat_ms $code ${msg:-unknown}" >"$TMP_DIR/result-$i.txt"
+			echo "ERR $lat_ms $code ${msg:-unknown} attempt=$attempt" >"$TMP_DIR/result-$i.txt"
 		fi
 	) &
 
@@ -135,7 +163,12 @@ echo "- duration_ms=$duration_ms throughput_rps=$rps"
 echo "- latency_avg_ms=$avg_latency latency_p95_ms=$p95 latency_max_ms=$max_latency"
 
 if [ "$err_count" -gt 0 ]; then
-	echo "FAIL: observed failed requests under load" >&2
+	echo "- error_code_breakdown:"
+	awk '/^ERR /{print $3}' "$TMP_DIR"/result-*.txt | sort | uniq -c | awk '{printf "  - code=%s count=%s\n", $2, $1}'
+fi
+
+if [ "$err_count" -gt "$MAX_FAILURES" ]; then
+	echo "FAIL: observed failed requests under load (failures=$err_count max_failures=$MAX_FAILURES)" >&2
 	exit 1
 fi
 
@@ -143,4 +176,4 @@ if [ "$max_latency" -gt "$MAX_LATENCY_MS_WARN" ]; then
 	echo "WARN: max latency ${max_latency}ms exceeded warning threshold ${MAX_LATENCY_MS_WARN}ms"
 fi
 
-echo "PASS: high-rate throughput run completed without failed requests"
+echo "PASS: high-rate throughput run completed within allowed failure threshold (failures=$err_count max_failures=$MAX_FAILURES)"

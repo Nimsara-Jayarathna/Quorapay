@@ -6,6 +6,8 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PID_DIR="$ROOT_DIR/data/pids"
 STOPPED=0
 
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
 terminate_pid() {
 	pid="$1"
 	if [ -z "$pid" ]; then
@@ -36,7 +38,8 @@ if [ -d "$PID_DIR" ]; then
 fi
 
 if command -v lsof >/dev/null 2>&1; then
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
 			terminate_pid "$pid"
 		done

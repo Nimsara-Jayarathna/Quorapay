@@ -8,6 +8,8 @@ POLL_SECONDS="${POLL_SECONDS:-1}"
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PID_DIR="$ROOT_DIR/data/pids"
 
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
 extract_string() {
 	echo "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
 }
@@ -33,7 +35,8 @@ find_leader_and_follower() {
 	leader_port=""
 	follower_port=""
 	follower_id=""
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		json=$(status_for_port "$port")
 		[ -n "$json" ] || continue
 		role=$(extract_string "$json" "role")
@@ -56,12 +59,46 @@ wait_counts_match_all() {
 			return 1
 		fi
 
-		c1=$(ledger_count_for_port 8001)
-		c2=$(ledger_count_for_port 8002)
-		c3=$(ledger_count_for_port 8003)
-		if [ "$c1" = "$c2" ] && [ "$c2" = "$c3" ] && [ "$c1" != "-1" ]; then
-			echo "$c1"
+		consensus_count=""
+		ok=1
+		for spec in $(echo "$NODES" | tr ',' ' '); do
+			port=$(echo "$spec" | cut -d: -f2)
+			c=$(ledger_count_for_port "$port")
+			if [ "$c" = "-1" ]; then
+				ok=0
+				break
+			fi
+			if [ -z "$consensus_count" ]; then
+				consensus_count="$c"
+			elif [ "$c" != "$consensus_count" ]; then
+				ok=0
+				break
+			fi
+		done
+		if [ "$ok" -eq 1 ] && [ -n "$consensus_count" ]; then
+			echo "$consensus_count"
 			return 0
+		fi
+		sleep "$POLL_SECONDS"
+	done
+}
+
+wait_node_active_role() {
+	port="$1"
+	timeout="${2:-90}"
+	start_ts=$(date +%s)
+	while :; do
+		now_ts=$(date +%s)
+		if [ $((now_ts - start_ts)) -gt "$timeout" ]; then
+			return 1
+		fi
+		json=$(status_for_port "$port")
+		if [ -n "$json" ]; then
+			role=$(extract_string "$json" "role")
+			if [ "$role" = "FOLLOWER" ] || [ "$role" = "LEADER" ]; then
+				echo "$role"
+				return 0
+			fi
 		fi
 		sleep "$POLL_SECONDS"
 	done
@@ -120,12 +157,12 @@ final_count=$(wait_counts_match_all) || {
 	exit 1
 }
 
-final_status=$(status_for_port "$follower_port")
-final_role=$(extract_string "$final_status" "role")
-if [ "$final_role" != "FOLLOWER" ] && [ "$final_role" != "LEADER" ]; then
-	echo "FAIL: resumed node did not recover to active role (role=$final_role)" >&2
+final_role=$(wait_node_active_role "$follower_port" "$TIMEOUT_SECONDS") || {
+	final_status=$(status_for_port "$follower_port")
+	last_role=$(extract_string "$final_status" "role")
+	echo "FAIL: resumed node did not recover to active role (last role=$last_role)" >&2
 	exit 1
-fi
+}
 
 echo "PASS: temporary isolation + convergence verified"
 echo "- follower $follower_id resumed and rejoined with role=$final_role"

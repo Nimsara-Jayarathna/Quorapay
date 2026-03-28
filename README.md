@@ -37,6 +37,37 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 6. Continue submitting requests after leadership recovery.
 7. Verify each node ledger converges to the same committed state.
 
+## Cluster Size Recipes (3, 5, 7)
+
+Cluster topology is modular and controlled by env vars:
+- `CLUSTER_SIZE` (odd integer >= 3, default `3`)
+- `CLUSTER_BASE_PORT` (default `8001`)
+- `NODES` (optional explicit override; if set, it takes priority)
+
+Quick start:
+
+```bash
+# 3 nodes
+CLUSTER_SIZE=3 ./scripts/run-zk.sh
+CLUSTER_SIZE=3 ./scripts/run-nodes.sh
+
+# 5 nodes
+CLUSTER_SIZE=5 ./scripts/run-zk.sh
+CLUSTER_SIZE=5 ./scripts/run-nodes.sh
+
+# 7 nodes
+CLUSTER_SIZE=7 ./scripts/run-zk.sh
+CLUSTER_SIZE=7 ./scripts/run-nodes.sh
+```
+
+Stop the same cluster size:
+
+```bash
+CLUSTER_SIZE=3 ./scripts/stop-nodes.sh
+CLUSTER_SIZE=5 ./scripts/stop-nodes.sh
+CLUSTER_SIZE=7 ./scripts/stop-nodes.sh
+```
+
 ## Baseline Run
 
 This baseline milestone wires only ZooKeeper membership/leader election plus per-node SQLite initialization. It does not include payment submission, replication, quorum commit, or consensus libraries beyond ZooKeeper coordination.
