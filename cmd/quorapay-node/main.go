@@ -115,7 +115,10 @@ func main() {
 
 func runFollowerCatchUpLoop(
 	logger *log.Logger,
-	coord interface{ CurrentStatus() coordination.Status },
+	coord interface {
+		CurrentStatus() coordination.Status
+		MarkRecoveryCaughtUp()
+	},
 	store interface {
 		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
 		AppendPending(context.Context, replication.LogEntry) error
@@ -136,6 +139,9 @@ func runFollowerCatchUpLoop(
 
 		status := coord.CurrentStatus()
 		if status.Role == coordination.RoleLeader || strings.TrimSpace(status.LeaderURL) == "" {
+			if status.Role == coordination.RoleLeader {
+				coord.MarkRecoveryCaughtUp()
+			}
 			continue
 		}
 
@@ -153,6 +159,7 @@ func runFollowerCatchUpLoop(
 			logger.Printf("catch-up request failed from leader=%s: %v", status.LeaderURL, err)
 			continue
 		}
+		coord.MarkRecoveryCaughtUp()
 		if !resp.Success || len(resp.Entries) == 0 {
 			continue
 		}

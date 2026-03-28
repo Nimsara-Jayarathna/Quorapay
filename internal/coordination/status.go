@@ -84,6 +84,9 @@ func (m *Manager) setFaultState(next string, reason string) error {
 	m.status.FaultState = next
 	m.status.LastStateChange = now
 	m.status.RecoveryInProgress = next == FaultStateRecovering || next == FaultStateRejoined
+	if next == FaultStateRecovering || next == FaultStateFailed {
+		m.recoveryCaughtUp = false
+	}
 	if current == FaultStateRejoined && next == FaultStateHealthy {
 		m.status.LastRecoveryTime = now
 	}

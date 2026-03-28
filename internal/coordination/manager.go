@@ -36,13 +36,14 @@ type Manager struct {
 	doneCh  chan struct{}
 	closeMu sync.Once
 
-	mu             sync.RWMutex
-	status         Status
-	candidatePath  string
-	eligibleSince  time.Time
-	lastLoopStart  time.Time
-	lastKnownLease leaderLease
-	rejoinedSince  time.Time
+	mu               sync.RWMutex
+	status           Status
+	candidatePath    string
+	eligibleSince    time.Time
+	lastLoopStart    time.Time
+	lastKnownLease   leaderLease
+	rejoinedSince    time.Time
+	recoveryCaughtUp bool
 }
 
 func NewManager(cfg Config) *Manager {
@@ -63,9 +64,17 @@ func NewManager(cfg Config) *Manager {
 			FaultState:         FaultStateRecovering,
 			RecoveryInProgress: true,
 		},
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		recoveryCaughtUp: false,
+		stopCh:           make(chan struct{}),
+		doneCh:           make(chan struct{}),
 	}
+}
+
+// MarkRecoveryCaughtUp records that the node has completed catch-up with leader state.
+func (m *Manager) MarkRecoveryCaughtUp() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recoveryCaughtUp = true
 }
 
 func (m *Manager) Start() error {
@@ -246,13 +255,20 @@ func (m *Manager) reconcile() error {
 	m.mu.RLock()
 	currentFaultState := m.status.FaultState
 	joinedAt := m.rejoinedSince
+	caughtUp := m.recoveryCaughtUp
+	currentRole := m.status.Role
 	m.mu.RUnlock()
 
-	if currentFaultState == FaultStateRecovering {
+	if currentRole == RoleLeader && !caughtUp {
+		m.MarkRecoveryCaughtUp()
+		caughtUp = true
+	}
+
+	if currentFaultState == FaultStateRecovering && caughtUp {
 		if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
 			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
 		}
-	} else if currentFaultState == FaultStateRejoined && !joinedAt.IsZero() && time.Since(joinedAt) >= rejoinedHold {
+	} else if currentFaultState == FaultStateRejoined && caughtUp && !joinedAt.IsZero() && time.Since(joinedAt) >= rejoinedHold {
 		if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
 			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
 		}
