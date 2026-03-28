@@ -93,6 +93,14 @@ func (m *Manager) CurrentStatus() Status {
 	return status
 }
 
+func (m *Manager) AdvanceLogHead(nextIndex int64) error {
+	return m.leaderAdvanceLogHead(nextIndex)
+}
+
+func (m *Manager) CurrentLogHead() (int64, error) {
+	return m.readLogHead()
+}
+
 func (m *Manager) GetFollowerURLs() ([]string, error) {
 	if m.conn == nil || !m.started {
 		return []string{}, fmt.Errorf("zookeeper connection is not initialized")
