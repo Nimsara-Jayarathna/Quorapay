@@ -23,6 +23,10 @@ type Config struct {
 	CORSAllowed      string
 	ZKAddr           string
 	StoragePath      string
+	SkewWarnMS       int64
+	SkewRejectMS     int64
+	MaxMessageAgeMS  int64
+	MaxFutureDriftMS int64
 	LeaderHTTPClient *http.Client
 	RequestShutdown  func(reason string)
 }
@@ -55,7 +59,10 @@ type handler struct {
 	leaderHTTPClient *http.Client
 	lamportClock     *timesync.LamportClock
 	skewTracker      *timesync.SkewTracker
-	timeValidator    *timesync.Validator
+	skewWarn         time.Duration
+	skewReject       time.Duration
+	maxMessageAge    time.Duration
+	maxFutureDrift   time.Duration
 }
 
 func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Status }, ledger LedgerStore, replicator ...Replicator) http.Handler {
@@ -83,8 +90,11 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		leaderHTTPClient: leaderClient,
 		lamportClock:     timesync.NewLamportClock(),
 		skewTracker:      timesync.NewSkewTracker(),
+		skewWarn:         durationOrDefaultMS(cfg.SkewWarnMS, 300*time.Millisecond),
+		skewReject:       durationOrDefaultMS(cfg.SkewRejectMS, 500*time.Millisecond),
+		maxMessageAge:    durationOrDefaultMS(cfg.MaxMessageAgeMS, 2*time.Second),
+		maxFutureDrift:   durationOrDefaultMS(cfg.MaxFutureDriftMS, 500*time.Millisecond),
 	}
-	h.timeValidator = timesync.NewValidator(h.skewTracker)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
@@ -96,6 +106,13 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
 	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
+}
+
+func durationOrDefaultMS(valueMS int64, fallback time.Duration) time.Duration {
+	if valueMS <= 0 {
+		return fallback
+	}
+	return time.Duration(valueMS) * time.Millisecond
 }
 
 func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {

@@ -28,7 +28,7 @@ type Payment struct {
 	Currency     string  `json:"currency"`
 	Status       string  `json:"status"`
 	PhysicalTime int64   `json:"physical_time,omitempty"`
-	LogicalTime  int64   `json:"logical_time,omitempty"`
+	LogicalTime  int64   `json:"logical_time"`
 	CreatedAt    string  `json:"created_at"`
 	ReceivedBy   string  `json:"received_by"`
 	ProcessedBy  string  `json:"processed_by"`
