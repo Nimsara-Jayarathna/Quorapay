@@ -40,6 +40,9 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	if got := m.status.FaultState; got != FaultStateRecovering {
 		t.Fatalf("initial fault state = %q, want %q", got, FaultStateRecovering)
 	}
+	if !m.status.RecoveryInProgress {
+		t.Fatalf("initial recovery_in_progress = false, want true")
+	}
 
 	if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
 		t.Fatalf("setFaultState REJOINED failed: %v", err)
@@ -53,6 +56,9 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	if m.rejoinedSince.IsZero() {
 		t.Fatalf("rejoinedSince should be set when entering REJOINED")
 	}
+	if !m.status.RecoveryInProgress {
+		t.Fatalf("recovery_in_progress = false in REJOINED, want true")
+	}
 
 	if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
 		t.Fatalf("setFaultState HEALTHY failed: %v", err)
@@ -65,6 +71,12 @@ func TestSetFaultState_ValidFlow(t *testing.T) {
 	}
 	if got := m.status.LastFaultReason; got != "node operating normally" {
 		t.Fatalf("last_fault_reason = %q, want %q", got, "node operating normally")
+	}
+	if m.status.RecoveryInProgress {
+		t.Fatalf("recovery_in_progress = true in HEALTHY, want false")
+	}
+	if m.status.LastRecoveryTime == "" {
+		t.Fatalf("last_recovery_time should be set when becoming HEALTHY after REJOINED")
 	}
 }
 
@@ -85,4 +97,3 @@ func TestSetFaultState_InvalidTransition(t *testing.T) {
 		t.Fatalf("fault state changed on invalid transition: got %q, want %q", got, FaultStateRecovering)
 	}
 }
-
