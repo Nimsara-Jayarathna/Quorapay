@@ -86,7 +86,9 @@ func (r CatchUpRequest) Validate() error {
 
 // CatchUpResponse returns entries for a catch-up request.
 type CatchUpResponse struct {
-	Success bool       `json:"success"`
-	Entries []LogEntry `json:"entries,omitempty"`
-	Message string     `json:"message,omitempty"`
+	Success        bool       `json:"success"`
+	Entries        []LogEntry `json:"entries,omitempty"`
+	Message        string     `json:"message,omitempty"`
+	HasMore        bool       `json:"has_more"`
+	TotalAvailable int        `json:"total_available"`
 }

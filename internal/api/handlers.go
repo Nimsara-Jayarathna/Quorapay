@@ -274,9 +274,17 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 
 	status := h.coordinator.CurrentStatus()
 	if status.Role != coordination.RoleLeader {
+		if status.LeaderURL != "" {
+			redirectURL := status.LeaderURL + "/internal/catchup"
+			if r.URL.RawQuery != "" {
+				redirectURL += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+			return
+		}
 		writeJSON(w, http.StatusServiceUnavailable, replication.CatchUpResponse{
 			Success: false,
-			Message: "catch-up source must be leader",
+			Message: "no leader available",
 		})
 		return
 	}
@@ -292,6 +300,20 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 			Message: "from_log_index must be a non-negative integer",
 		})
 		return
+	}
+
+	var limit int
+	limitRaw := r.URL.Query().Get("limit")
+	if limitRaw != "" {
+		l, err := strconv.Atoi(limitRaw)
+		if err != nil || l < 0 {
+			writeJSON(w, http.StatusBadRequest, replication.CatchUpResponse{
+				Success: false,
+				Message: "limit must be a non-negative integer",
+			})
+			return
+		}
+		limit = l
 	}
 
 	items, err := h.ledger.ListCommittedAfter(r.Context(), fromLogIndex)
@@ -318,8 +340,16 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 		})
 	}
 
+	totalAvailable := len(entries)
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	hasMore := limit > 0 && totalAvailable > limit
+
 	writeJSON(w, http.StatusOK, replication.CatchUpResponse{
-		Success: true,
-		Entries: entries,
+		Success:        true,
+		Entries:        entries,
+		HasMore:        hasMore,
+		TotalAvailable: totalAvailable,
 	})
 }

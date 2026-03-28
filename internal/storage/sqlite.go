@@ -301,6 +301,10 @@ func (s *SQLiteStore) migrate() error {
 		return err
 	}
 
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_payments_list_order ON payments(logical_time ASC, log_index ASC, id ASC)`); err != nil {
+		return err
+	}
+
 	return nil
 }
 

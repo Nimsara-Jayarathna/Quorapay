@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -29,6 +30,7 @@ func (s *stubLocalLedger) CommitByPaymentID(_ context.Context, paymentID string)
 }
 
 type stubTransport struct {
+	sync.Mutex
 	appendResults map[string]AppendEntriesResponse
 	appendErrors  map[string]error
 	commitResults map[string]CommitResponse
@@ -40,6 +42,9 @@ type stubTransport struct {
 }
 
 func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL string, req AppendEntriesRequest) (AppendEntriesResponse, error) {
+	s.Lock()
+	defer s.Unlock()
+
 	s.appendCalls++
 	if s.lastRequests == nil {
 		s.lastRequests = make(map[string]AppendEntriesRequest)
@@ -57,6 +62,9 @@ func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL stri
 }
 
 func (s *stubTransport) CommitToFollower(_ context.Context, followerBaseURL string, req CommitRequest) (CommitResponse, error) {
+	s.Lock()
+	defer s.Unlock()
+
 	s.commitCalls++
 	if s.lastCommits == nil {
 		s.lastCommits = make(map[string]CommitRequest)
