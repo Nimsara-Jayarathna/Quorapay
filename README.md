@@ -18,15 +18,13 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 
 ## Repository Layout
 
-- `client/`: Client-facing interfaces (`cli/`, `web/`) for driving and observing prototype behavior.
-- `cmd/quorapay-node/`: Node service entrypoint location.
-- `configs/`: Node instance and ZooKeeper environment configuration.
-- `deployments/`: Deployment and environment assets for demos.
-- `docs/`: Architecture, protocol, testing, evaluation, and team-specific working documents.
-- `internal/`: Core domain modules (`api`, `coordination`, `replication`, `storage`, `timesync`, `consensus`).
-- `scripts/`: Developer automation scripts.
-- `test/`: Smoke and failure-focused test suites.
-- `tools/`: Auxiliary tooling used by development and evaluation workflows.
+- `client/web/`: React web client for payment submission, status inspection, and ledger viewing.
+- `cmd/quorapay-node/`: Node service entrypoint.
+- `data/`: Runtime artifacts (SQLite DBs, logs, pids); generated locally and git-ignored.
+- `docs/`: Team documentation and consensus notes.
+- `internal/`: Core backend modules (API, coordination, replication, storage, time sync, consensus).
+- `scripts/`: Local automation for ZooKeeper, node lifecycle, and test scenarios.
+- `go.mod`, `go.sum`: Go module dependency definitions.
 
 ## Typical Demo Flow
 
