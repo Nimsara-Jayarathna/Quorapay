@@ -41,13 +41,25 @@ func (s *stubLedgerStore) AppendPending(_ context.Context, entry replication.Log
 	}
 
 	s.payments[entry.PaymentID] = storage.Payment{
-		PaymentID: entry.PaymentID,
-		LogIndex:  entry.LogIndex,
-		Amount:    entry.Amount,
-		Currency:  entry.Currency,
-		Status:    replication.StatusPending.String(),
+		PaymentID:   entry.PaymentID,
+		LogIndex:    entry.LogIndex,
+		Amount:      entry.Amount,
+		Currency:    entry.Currency,
+		Status:      replication.StatusPending.String(),
+		ReceivedBy:  entry.ReceivedBy,
+		ProcessedBy: entry.LeaderID,
 	}
 	return nil
+}
+
+func (s *stubLedgerStore) ListCommittedAfter(_ context.Context, logIndex int64) ([]storage.Payment, error) {
+	items := make([]storage.Payment, 0, len(s.payments))
+	for _, p := range s.payments {
+		if p.Status == replication.StatusCommitted.String() && p.LogIndex > logIndex {
+			items = append(items, p)
+		}
+	}
+	return items, nil
 }
 
 func (s *stubLedgerStore) CommitByPaymentID(_ context.Context, paymentID string) error {
@@ -180,6 +192,50 @@ func TestInternalCommitMissingPayment(t *testing.T) {
 	}
 	if ack.Success {
 		t.Fatalf("missing payment commit should return success=false")
+	}
+}
+
+func TestInternalCatchUpLeaderReturnsCommittedEntries(t *testing.T) {
+	store := newStubLedgerStore()
+	store.payments["pay-1"] = storage.Payment{
+		PaymentID:   "pay-1",
+		LogIndex:    3,
+		Amount:      10,
+		Currency:    "USD",
+		Status:      replication.StatusCommitted.String(),
+		ReceivedBy:  "A",
+		ProcessedBy: "C",
+	}
+	store.payments["pay-2"] = storage.Payment{
+		PaymentID:   "pay-2",
+		LogIndex:    5,
+		Amount:      12,
+		Currency:    "USD",
+		Status:      replication.StatusCommitted.String(),
+		ReceivedBy:  "B",
+		ProcessedBy: "C",
+	}
+
+	coord := &stubCoordinator{role: coordination.RoleLeader}
+	h := NewHandler(Config{NodeID: "C", CORSAllowed: "*"}, coord, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup?from_log_index=3", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	var out replication.CatchUpResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("success = false, want true")
+	}
+	if len(out.Entries) != 1 || out.Entries[0].PaymentID != "pay-2" {
+		t.Fatalf("entries = %+v, want only pay-2", out.Entries)
 	}
 }
 

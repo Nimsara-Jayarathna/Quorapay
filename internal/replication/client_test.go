@@ -141,3 +141,32 @@ func TestHTTPClient_ContextTimeout(t *testing.T) {
 		t.Fatalf("error = %q, want context deadline exceeded", err)
 	}
 }
+
+func TestHTTPClient_CatchUpFromLeaderSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/internal/catchup" {
+			t.Fatalf("path = %s, want /internal/catchup", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("from_log_index"); got != "7" {
+			t.Fatalf("from_log_index = %s, want 7", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"entries":[{"log_index":8,"term":2,"leader_id":"C","payment_id":"pay-8","amount":10,"currency":"USD","status":"COMMITTED"}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.Client())
+	resp, err := client.CatchUpFromLeader(context.Background(), srv.URL, 7)
+	if err != nil {
+		t.Fatalf("CatchUpFromLeader() error = %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("resp.Success = false, want true")
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].PaymentID != "pay-8" {
+		t.Fatalf("entries = %+v, want single pay-8", resp.Entries)
+	}
+}
