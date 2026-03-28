@@ -24,6 +24,7 @@ Variables:
 - `VITE_NODE_BASE_PORT` optional generated base port when `VITE_NODE_URLS` is not set.
 - `VITE_NODE_HOST` optional generated host when `VITE_NODE_URLS` is not set.
 - `VITE_DEFAULT_NODE_INDEX` default selected node index.
+- `VITE_BLOCKING_MODAL_TIMEOUT_MS` auto-close timeout (ms) for non-loading payment blocking modal states.
 
 Recommended mapping with backend:
 - If backend uses `CLUSTER_SIZE=3|5|7`, set `VITE_CLUSTER_SIZE` to the same value.
@@ -42,6 +43,7 @@ VITE_CLUSTER_SIZE=5
 VITE_NODE_BASE_PORT=8001
 VITE_NODE_HOST=localhost
 VITE_DEFAULT_NODE_INDEX=0
+VITE_BLOCKING_MODAL_TIMEOUT_MS=3000
 ```
 
 7-node UI example:
@@ -51,6 +53,7 @@ VITE_CLUSTER_SIZE=7
 VITE_NODE_BASE_PORT=8001
 VITE_NODE_HOST=localhost
 VITE_DEFAULT_NODE_INDEX=0
+VITE_BLOCKING_MODAL_TIMEOUT_MS=3000
 ```
 
 ## Run

@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import LedgerTable from "./components/LedgerTable";
 import NodeStatusPanel from "./components/NodeStatusPanel";
 import NodeTabs from "./components/NodeTabs";
+import NoNodesConnectedModal from "./components/NoNodesConnectedModal";
 import PaymentActionModal from "./components/PaymentActionModal";
 import PaymentForm from "./components/PaymentForm";
 import ShutdownConfirmModal from "./components/ShutdownConfirmModal";
@@ -36,6 +37,11 @@ const defaultNodeIndex =
   Number.isInteger(configuredDefaultIndex) && configuredDefaultIndex >= 0 && configuredDefaultIndex < initialNodeUrls.length
     ? configuredDefaultIndex
     : 0;
+const configuredBlockingModalTimeoutMS = Number(import.meta.env.VITE_BLOCKING_MODAL_TIMEOUT_MS ?? "3000");
+const blockingModalTimeoutMS =
+  Number.isInteger(configuredBlockingModalTimeoutMS) && configuredBlockingModalTimeoutMS >= 0
+    ? configuredBlockingModalTimeoutMS
+    : 3000;
 
 function generatePaymentId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -49,6 +55,7 @@ function App() {
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
   const selectedNodeUrl = nodeUrls[selectedNodeIndex] ?? "";
   const [nodeMetaByUrl, setNodeMetaByUrl] = useState<Record<string, { nodeId?: string; role?: string }>>({});
+  const [nodeMetaLoaded, setNodeMetaLoaded] = useState(false);
 
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -137,7 +144,14 @@ function App() {
       }),
     );
     setNodeMetaByUrl(next);
+    setNodeMetaLoaded(true);
   }, [nodeUrls]);
+
+  const connectedNodeCount = useMemo(
+    () => Object.values(nodeMetaByUrl).filter((meta) => Boolean(meta.nodeId)).length,
+    [nodeMetaByUrl],
+  );
+  const noNodesConnected = nodeUrls.length === 0 || (nodeMetaLoaded && connectedNodeCount === 0);
 
   const refreshLedger = useCallback(async () => {
     if (!selectedNodeUrl) {
@@ -175,7 +189,7 @@ function App() {
         paymentModalTimeoutRef.current = window.setTimeout(() => {
           setPaymentModalOpen(false);
           paymentModalTimeoutRef.current = null;
-        }, 3000);
+        }, blockingModalTimeoutMS);
       }
     };
 
@@ -337,18 +351,20 @@ function App() {
         title={paymentModalTitle}
         message={paymentModalMessage}
       />
+      <NoNodesConnectedModal
+        open={noNodesConnected}
+        onRetry={() => {
+          void refreshTopology();
+          void refreshNodeMeta();
+          void refreshStatus();
+        }}
+      />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <header className="mb-6">
           <h1 className="text-2xl font-semibold text-slate-900">Quorapay Web Client</h1>
           <p className="mt-1 text-sm text-slate-600">Submit payments, inspect node status, and view replicated ledger data.</p>
         </header>
-
-        {nodeUrls.length === 0 ? (
-          <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            No nodes configured. Add `VITE_NODE_URLS` in `.env` based on `.env.example`.
-          </div>
-        ) : null}
 
         {statusError ? (
           <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div>
