@@ -160,7 +160,7 @@ func TestPayHandler_NoLeaderReturns503(t *testing.T) {
 	}
 }
 
-func TestPayHandler_DuplicatePaymentReturnsOK(t *testing.T) {
+func TestPayHandler_CommittedPaymentReturns200(t *testing.T) {
 	store := newStubLedgerStore()
 	store.payments["pay-dup"] = storage.Payment{PaymentID: "pay-dup", Status: replication.StatusCommitted.String()}
 
@@ -191,6 +191,39 @@ func TestPayHandler_DuplicatePaymentReturnsOK(t *testing.T) {
 		t.Fatalf("message = %q, want %q", out.Message, "payment already processed")
 	}
 }
+
+func TestPayHandler_PendingPaymentReturns409(t *testing.T) {
+	store := newStubLedgerStore()
+	store.payments["pay-pend"] = storage.Payment{PaymentID: "pay-pend", Status: replication.StatusPending.String()}
+
+	coord := &stubCoordinator{
+		role:    coordination.RoleLeader,
+		term:    4,
+		logHead: 20,
+	}
+
+	h := NewHandler(Config{NodeID: "node-a", CORSAllowed: "*"}, coord, store, &stubReplicator{})
+
+	resp := performJSONRequest(t, h, http.MethodPost, "/pay", replication.PaymentRequest{
+		PaymentID: "pay-pend",
+		Amount:    20,
+		Currency:  "USD",
+	})
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusConflict)
+	}
+
+	var out map[string]string
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if out["message"] != "payment is pending — quorum was not reached on previous attempt, please retry" {
+		t.Fatalf("message = %q", out["message"])
+	}
+}
+
 
 func TestPayHandler_QuorumReachedReturns200(t *testing.T) {
 	coord := &stubCoordinator{

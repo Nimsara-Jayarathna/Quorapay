@@ -42,9 +42,8 @@ type QuorumReplicationResult struct {
 
 // ReplicationService orchestrates future quorum replication steps from the leader.
 type ReplicationService struct {
-	ledger      LocalLedger
-	transport   FollowerTransport
-	transportMu sync.Mutex
+	ledger    LocalLedger
+	transport FollowerTransport
 }
 
 func NewReplicationService(ledger LocalLedger, transport FollowerTransport) *ReplicationService {
@@ -115,9 +114,7 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 		wg.Add(1)
 		go func(idx int, url string) {
 			defer wg.Done()
-			s.transportMu.Lock()
 			resp, err := s.transport.AppendToFollower(ctx, url, appendReq)
-			s.transportMu.Unlock()
 			if err != nil {
 				appendResults <- appendResult{index: idx, ack: false, errMsg: err.Error()}
 				return

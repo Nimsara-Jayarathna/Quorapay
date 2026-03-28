@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -48,6 +49,7 @@ type LedgerStore interface {
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
 	ExistsByPaymentID(context.Context, string) (bool, error)
+	GetPaymentByID(context.Context, string) (storage.Payment, error)
 }
 
 type handler struct {
@@ -150,17 +152,24 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := h.ledger.ExistsByPaymentID(r.Context(), req.PaymentID)
-	if err != nil {
+	payment, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID)
+	if err == nil {
+		if payment.Status == replication.StatusCommitted.String() {
+			writeJSON(w, http.StatusOK, replication.PaymentResponse{
+				Status:    "OK",
+				PaymentID: req.PaymentID,
+				Message:   "payment already processed",
+			})
+			return
+		}
+		if payment.Status == replication.StatusPending.String() {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"message": "payment is pending — quorum was not reached on previous attempt, please retry",
+			})
+			return
+		}
+	} else if !errors.Is(err, storage.ErrPaymentNotFound) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
-		return
-	}
-	if exists {
-		writeJSON(w, http.StatusOK, replication.PaymentResponse{
-			Status:    "OK",
-			PaymentID: req.PaymentID,
-			Message:   "payment already processed",
-		})
 		return
 	}
 

@@ -55,6 +55,9 @@ func (e LogEntry) Validate() error {
 	if e.Term < 0 {
 		return fmt.Errorf("term cannot be negative")
 	}
+	if e.LeaderID == "" {
+		return fmt.Errorf("leader_id is required")
+	}
 	if e.PaymentID == "" {
 		return fmt.Errorf("payment_id is required")
 	}

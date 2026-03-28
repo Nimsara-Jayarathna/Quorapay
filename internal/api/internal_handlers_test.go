@@ -79,6 +79,14 @@ func (s *stubLedgerStore) ExistsByPaymentID(_ context.Context, paymentID string)
 	return exists, nil
 }
 
+func (s *stubLedgerStore) GetPaymentByID(_ context.Context, paymentID string) (storage.Payment, error) {
+	payment, exists := s.payments[paymentID]
+	if !exists {
+		return storage.Payment{}, storage.ErrPaymentNotFound
+	}
+	return payment, nil
+}
+
 func TestInternalAppendSuccess(t *testing.T) {
 	h := NewHandler(Config{NodeID: "B", CORSAllowed: "*"}, stubStatusSource{}, newStubLedgerStore())
 
