@@ -15,6 +15,7 @@ import (
 const (
 	appendPath     = "/internal/append"
 	commitPath     = "/internal/commit"
+	catchupPath    = "/internal/catchup"
 	defaultTimeout = 5 * time.Second
 )
 
@@ -60,6 +61,27 @@ func (c *HTTPClient) CommitToFollower(ctx context.Context, followerBaseURL strin
 	return resp, nil
 }
 
+func (c *HTTPClient) CatchUpFromLeader(ctx context.Context, leaderBaseURL string, fromLogIndex int64) (CatchUpResponse, error) {
+	var resp CatchUpResponse
+	endpoint, err := joinFollowerURL(leaderBaseURL, catchupPath)
+	if err != nil {
+		return resp, fmt.Errorf("build catch-up URL: %w", err)
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return resp, fmt.Errorf("parse catch-up URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("from_log_index", fmt.Sprintf("%d", fromLogIndex))
+	parsed.RawQuery = query.Encode()
+
+	if err := c.getJSON(ctx, parsed.String(), &resp); err != nil {
+		return CatchUpResponse{}, fmt.Errorf("catch-up from leader %s: %w", leaderBaseURL, err)
+	}
+	return resp, nil
+}
+
 func (c *HTTPClient) postJSON(ctx context.Context, endpoint string, request any, out any) error {
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -91,6 +113,33 @@ func (c *HTTPClient) postJSON(ctx context.Context, endpoint string, request any,
 		return fmt.Errorf("decode response JSON: %w", err)
 	}
 
+	return nil
+}
+
+func (c *HTTPClient) getJSON(ctx context.Context, endpoint string, out any) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("construct request: %w", err)
+	}
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return fmt.Errorf("read response body: %w", err)
+	}
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return fmt.Errorf("follower returned status %d: %s", httpResp.StatusCode, extractResponseMessage(bodyBytes))
+	}
+
+	if err := json.Unmarshal(bodyBytes, out); err != nil {
+		return fmt.Errorf("decode response JSON: %w", err)
+	}
 	return nil
 }
 

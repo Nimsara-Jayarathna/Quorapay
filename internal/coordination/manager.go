@@ -14,7 +14,6 @@ const (
 	RoleLeader   = "LEADER"
 	RoleFollower = "FOLLOWER"
 	RoleUnknown  = "UNKNOWN"
-	rejoinedHold = 3 * time.Second
 )
 
 type Config struct {
@@ -36,13 +35,14 @@ type Manager struct {
 	doneCh  chan struct{}
 	closeMu sync.Once
 
-	mu             sync.RWMutex
-	status         Status
-	candidatePath  string
-	eligibleSince  time.Time
-	lastLoopStart  time.Time
-	lastKnownLease leaderLease
-	rejoinedSince  time.Time
+	mu               sync.RWMutex
+	status           Status
+	candidatePath    string
+	eligibleSince    time.Time
+	lastLoopStart    time.Time
+	lastKnownLease   leaderLease
+	rejoinedSince    time.Time
+	recoveryCaughtUp bool
 }
 
 func NewManager(cfg Config) *Manager {
@@ -55,15 +55,37 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{
 		cfg: cfg,
 		status: Status{
-			NodeID:      cfg.NodeID,
-			Role:        RoleUnknown,
-			ZKAddr:      cfg.ZKAddr,
-			StoragePath: cfg.StoragePath,
-			ZKError:     "zookeeper not connected",
-			FaultState:  FaultStateRecovering,
+			NodeID:             cfg.NodeID,
+			Role:               RoleUnknown,
+			ZKAddr:             cfg.ZKAddr,
+			StoragePath:        cfg.StoragePath,
+			ZKError:            "zookeeper not connected",
+			FaultState:         FaultStateRecovering,
+			RecoveryInProgress: true,
+			LastFaultReason:    "startup recovery pending catch-up",
 		},
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		recoveryCaughtUp: false,
+		stopCh:           make(chan struct{}),
+		doneCh:           make(chan struct{}),
+	}
+}
+
+// MarkRecoveryCaughtUp records that the node has completed catch-up with leader state.
+func (m *Manager) MarkRecoveryCaughtUp() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recoveryCaughtUp = true
+	if m.status.FaultState == FaultStateRecovering || m.status.FaultState == FaultStateRejoined {
+		m.status.LastFaultReason = "catch-up complete"
+	}
+}
+
+// MarkRecoveryCatchUpFailed records a catch-up failure while recovery is in progress.
+func (m *Manager) MarkRecoveryCatchUpFailed(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.status.FaultState == FaultStateRecovering || m.status.FaultState == FaultStateRejoined {
+		m.status.LastFaultReason = "catch-up failed: " + reason
 	}
 }
 
@@ -244,15 +266,21 @@ func (m *Manager) reconcile() error {
 
 	m.mu.RLock()
 	currentFaultState := m.status.FaultState
-	joinedAt := m.rejoinedSince
+	caughtUp := m.recoveryCaughtUp
+	currentRole := m.status.Role
 	m.mu.RUnlock()
 
-	if currentFaultState == FaultStateRecovering {
-		if err := m.setFaultState(FaultStateRejoined, "node rejoined cluster"); err != nil {
+	if currentRole == RoleLeader && !caughtUp {
+		m.MarkRecoveryCaughtUp()
+		caughtUp = true
+	}
+
+	if currentFaultState == FaultStateRecovering && caughtUp {
+		if err := m.setFaultState(FaultStateRejoined, "catch-up complete; node rejoined cluster"); err != nil {
 			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
 		}
-	} else if currentFaultState == FaultStateRejoined && !joinedAt.IsZero() && time.Since(joinedAt) >= rejoinedHold {
-		if err := m.setFaultState(FaultStateHealthy, "node operating normally"); err != nil {
+	} else if currentFaultState == FaultStateRejoined && caughtUp {
+		if err := m.setFaultState(FaultStateHealthy, "recovery complete; node operating normally"); err != nil {
 			m.cfg.Logger.Printf("fault state transition skipped: %v", err)
 		}
 	}

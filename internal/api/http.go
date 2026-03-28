@@ -39,6 +39,7 @@ type Replicator interface {
 
 type LedgerStore interface {
 	ListPayments(context.Context) ([]storage.Payment, error)
+	ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
 	ExistsByPaymentID(context.Context, string) (bool, error)
@@ -85,6 +86,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/pay", h.payHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
+	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
 	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
 }
