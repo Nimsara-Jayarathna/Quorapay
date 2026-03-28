@@ -2,12 +2,9 @@ package replication
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 )
-
-var ErrQuorumReplicationNotImplemented = errors.New("quorum replication is not implemented yet")
 
 // LocalLedger defines the local persistence operations needed by quorum replication.
 type LocalLedger interface {
@@ -53,7 +50,7 @@ func NewReplicationService(ledger LocalLedger, transport FollowerTransport) *Rep
 	}
 }
 
-// ReplicateWithQuorum is a placeholder for the future end-to-end quorum flow.
+// ReplicateWithQuorum applies quorum replication for a single payment log entry.
 func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogEntry, followerBaseURLs []string) (QuorumReplicationResult, error) {
 	if s.ledger == nil {
 		return QuorumReplicationResult{}, fmt.Errorf("local ledger is not configured")
@@ -102,8 +99,8 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 	result.AckCount = 1
 
 	type appendResult struct {
-		index int
-		ack   bool
+		index  int
+		ack    bool
 		errMsg string
 	}
 
