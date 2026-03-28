@@ -118,6 +118,7 @@ func runFollowerCatchUpLoop(
 	coord interface {
 		CurrentStatus() coordination.Status
 		MarkRecoveryCaughtUp()
+		MarkRecoveryCatchUpFailed(string)
 	},
 	store interface {
 		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
@@ -156,6 +157,7 @@ func runFollowerCatchUpLoop(
 		resp, err := client.CatchUpFromLeader(ctx, status.LeaderURL, lastCommittedIndex)
 		cancel()
 		if err != nil {
+			coord.MarkRecoveryCatchUpFailed(err.Error())
 			logger.Printf("catch-up request failed from leader=%s: %v", status.LeaderURL, err)
 			continue
 		}
@@ -171,10 +173,12 @@ func runFollowerCatchUpLoop(
 				entry.ReceivedBy = entry.LeaderID
 			}
 			if err := store.AppendPending(context.Background(), entry); err != nil && !errors.Is(err, storage.ErrDuplicatePaymentID) {
+				coord.MarkRecoveryCatchUpFailed(err.Error())
 				logger.Printf("catch-up append failed payment_id=%s: %v", entry.PaymentID, err)
 				continue
 			}
 			if err := store.CommitByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
+				coord.MarkRecoveryCatchUpFailed(err.Error())
 				logger.Printf("catch-up commit failed payment_id=%s: %v", entry.PaymentID, err)
 				continue
 			}
