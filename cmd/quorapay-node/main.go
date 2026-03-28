@@ -13,6 +13,7 @@ import (
 
 	"quorapay/internal/api"
 	"quorapay/internal/coordination"
+	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
 
@@ -58,6 +59,9 @@ func main() {
 		}
 	}()
 
+	replClient := replication.NewHTTPClient(nil)
+	replService := replication.NewReplicationService(store, replClient)
+
 	handler := api.NewHandler(api.Config{
 		NodeID:      cfg.NodeID,
 		CORSAllowed: cfg.CORSAllowed,
@@ -69,7 +73,7 @@ func main() {
 			default:
 			}
 		},
-	}, coord, store)
+	}, coord, store, replService)
 
 	server := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
