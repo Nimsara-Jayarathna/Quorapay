@@ -199,31 +199,43 @@ func TestInternalCommitMissingPayment(t *testing.T) {
 	}
 }
 
-func TestInternalCatchUpLeaderReturnsCommittedEntries(t *testing.T) {
+func TestCatchUpHandler_NonLeaderReturns503(t *testing.T) {
+	coord := &stubCoordinator{role: coordination.RoleFollower}
+	h := NewHandler(Config{NodeID: "C"}, coord, newStubLedgerStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestCatchUpHandler_NilCoordinatorReturns503(t *testing.T) {
+	h := NewHandler(Config{NodeID: "C"}, nil, newStubLedgerStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestCatchUpHandler_NoParamDefaultsToZero(t *testing.T) {
 	store := newStubLedgerStore()
 	store.payments["pay-1"] = storage.Payment{
-		PaymentID:   "pay-1",
-		LogIndex:    3,
-		Amount:      10,
-		Currency:    "USD",
-		Status:      replication.StatusCommitted.String(),
-		ReceivedBy:  "A",
-		ProcessedBy: "C",
-	}
-	store.payments["pay-2"] = storage.Payment{
-		PaymentID:   "pay-2",
-		LogIndex:    5,
-		Amount:      12,
-		Currency:    "USD",
-		Status:      replication.StatusCommitted.String(),
-		ReceivedBy:  "B",
-		ProcessedBy: "C",
+		PaymentID: "pay-1",
+		LogIndex:  1,
+		Status:    replication.StatusCommitted.String(),
 	}
 
 	coord := &stubCoordinator{role: coordination.RoleLeader}
-	h := NewHandler(Config{NodeID: "C", CORSAllowed: "*"}, coord, store)
+	h := NewHandler(Config{NodeID: "C"}, coord, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/internal/catchup?from_log_index=3", nil)
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup", nil)
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
 
@@ -238,8 +250,82 @@ func TestInternalCatchUpLeaderReturnsCommittedEntries(t *testing.T) {
 	if !out.Success {
 		t.Fatalf("success = false, want true")
 	}
-	if len(out.Entries) != 1 || out.Entries[0].PaymentID != "pay-2" {
-		t.Fatalf("entries = %+v, want only pay-2", out.Entries)
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+}
+
+func TestCatchUpHandler_WithFromLogIndex(t *testing.T) {
+	store := newStubLedgerStore()
+	store.payments["pay-1"] = storage.Payment{
+		PaymentID: "pay-1",
+		LogIndex:  1,
+		Status:    replication.StatusCommitted.String(),
+	}
+	store.payments["pay-3"] = storage.Payment{
+		PaymentID: "pay-3",
+		LogIndex:  3,
+		Status:    replication.StatusCommitted.String(),
+	}
+
+	coord := &stubCoordinator{role: coordination.RoleLeader}
+	h := NewHandler(Config{NodeID: "C"}, coord, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup?from_log_index=2", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	var out replication.CatchUpResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].PaymentID != "pay-3" {
+		t.Fatalf("entries = %+v, want only pay-3", out.Entries)
+	}
+}
+
+func TestCatchUpHandler_InvalidFromLogIndex(t *testing.T) {
+	coord := &stubCoordinator{role: coordination.RoleLeader}
+	h := NewHandler(Config{NodeID: "C"}, coord, newStubLedgerStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup?from_log_index=abc", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCatchUpHandler_EmptyLedgerReturnsEmptyEntries(t *testing.T) {
+	coord := &stubCoordinator{role: coordination.RoleLeader}
+	h := NewHandler(Config{NodeID: "C"}, coord, newStubLedgerStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/catchup", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	var out replication.CatchUpResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("success = false, want true")
+	}
+	if out.Entries == nil || len(out.Entries) != 0 {
+		// Slice len == 0 allows nil slice, which standard json unmarshal converts properly 
+		// if we strictly check size. But let's just make sure it's 0.
+		if len(out.Entries) != 0 {
+			t.Fatalf("expected 0 entries, got %d", len(out.Entries))
+		}
 	}
 }
 
