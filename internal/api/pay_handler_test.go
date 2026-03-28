@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,11 +53,53 @@ type stubReplicator struct {
 	err    error
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func (s stubReplicator) ReplicateWithQuorum(_ context.Context, _ replication.LogEntry, _ []string) (replication.QuorumReplicationResult, error) {
 	return s.result, s.err
 }
 
-func TestPayHandler_NonLeaderRedirects(t *testing.T) {
+func TestPayHandler_NonLeaderForwardsToLeader(t *testing.T) {
+	leaderClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost {
+				t.Fatalf("method = %s, want POST", req.Method)
+			}
+			if req.URL.String() != "http://leader-node:8080/pay" {
+				t.Fatalf("url = %s, want %s", req.URL.String(), "http://leader-node:8080/pay")
+			}
+			if got := req.Header.Get(receivedByHeader); got != "node-b" {
+				t.Fatalf("forwarded %s header = %q, want %q", receivedByHeader, got, "node-b")
+			}
+			payloadBytes, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read forwarded body: %v", err)
+			}
+			var in replication.PaymentRequest
+			if err := json.Unmarshal(payloadBytes, &in); err != nil {
+				t.Fatalf("decode forwarded body: %v", err)
+			}
+			if in.PaymentID != "pay-forwarded" {
+				t.Fatalf("forwarded payment_id = %q, want %q", in.PaymentID, "pay-forwarded")
+			}
+
+			respBody, _ := json.Marshal(replication.PaymentResponse{
+				Status:    "OK",
+				PaymentID: "pay-forwarded",
+				Message:   "processed by leader",
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(respBody)),
+			}, nil
+		}),
+	}
+
 	coord := &stubCoordinator{
 		role:      coordination.RoleFollower,
 		leaderURL: "http://leader-node:8080",
@@ -63,20 +107,32 @@ func TestPayHandler_NonLeaderRedirects(t *testing.T) {
 		logHead:   10,
 	}
 
-	h := NewHandler(Config{NodeID: "node-b", CORSAllowed: "*"}, coord, newStubLedgerStore(), stubReplicator{})
+	h := NewHandler(Config{
+		NodeID:           "node-b",
+		CORSAllowed:      "*",
+		LeaderHTTPClient: leaderClient,
+	}, coord, newStubLedgerStore(), stubReplicator{})
 
 	resp := performJSONRequest(t, h, http.MethodPost, "/pay", replication.PaymentRequest{
-		PaymentID: "pay-redirect",
+		PaymentID: "pay-forwarded",
 		Amount:    10,
 		Currency:  "USD",
 	})
 
-	if resp.Code != http.StatusTemporaryRedirect {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusTemporaryRedirect)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
 	}
 
-	if got := resp.Header().Get("Location"); got != "http://leader-node:8080/pay" {
-		t.Fatalf("location = %q, want %q", got, "http://leader-node:8080/pay")
+	var out replication.PaymentResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if out.PaymentID != "pay-forwarded" {
+		t.Fatalf("payment_id = %q, want %q", out.PaymentID, "pay-forwarded")
+	}
+	if out.Message != "processed by leader" {
+		t.Fatalf("message = %q, want %q", out.Message, "processed by leader")
 	}
 }
 

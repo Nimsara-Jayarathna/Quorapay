@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -13,12 +15,15 @@ import (
 	"quorapay/internal/storage"
 )
 
+const receivedByHeader = "X-Quorapay-Received-By"
+
 type Config struct {
-	NodeID          string
-	CORSAllowed     string
-	ZKAddr          string
-	StoragePath     string
-	RequestShutdown func(reason string)
+	NodeID           string
+	CORSAllowed      string
+	ZKAddr           string
+	StoragePath      string
+	LeaderHTTPClient *http.Client
+	RequestShutdown  func(reason string)
 }
 
 type Coordinator interface {
@@ -40,11 +45,12 @@ type LedgerStore interface {
 }
 
 type handler struct {
-	cfg         Config
-	status      interface{ CurrentStatus() coordination.Status }
-	coordinator Coordinator
-	ledger      LedgerStore
-	replicator  Replicator
+	cfg              Config
+	status           interface{ CurrentStatus() coordination.Status }
+	coordinator      Coordinator
+	ledger           LedgerStore
+	replicator       Replicator
+	leaderHTTPClient *http.Client
 }
 
 func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Status }, ledger LedgerStore, replicator ...Replicator) http.Handler {
@@ -58,12 +64,18 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		coord = c
 	}
 
+	leaderClient := cfg.LeaderHTTPClient
+	if leaderClient == nil {
+		leaderClient = &http.Client{Timeout: 5 * time.Second}
+	}
+
 	h := &handler{
-		cfg:         cfg,
-		status:      status,
-		coordinator: coord,
-		ledger:      ledger,
-		replicator:  repl,
+		cfg:              cfg,
+		status:           status,
+		coordinator:      coord,
+		ledger:           ledger,
+		replicator:       repl,
+		leaderHTTPClient: leaderClient,
 	}
 
 	mux := http.NewServeMux()
@@ -89,9 +101,13 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := h.coordinator.CurrentStatus()
+	receivedBy := strings.TrimSpace(r.Header.Get(receivedByHeader))
+	if receivedBy == "" {
+		receivedBy = h.cfg.NodeID
+	}
 	if status.Role != coordination.RoleLeader {
 		if status.LeaderURL != "" {
-			http.Redirect(w, r, strings.TrimRight(status.LeaderURL, "/")+"/pay", http.StatusTemporaryRedirect)
+			h.forwardPayToLeader(w, r, status.LeaderURL, receivedBy)
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "no leader available"})
@@ -137,6 +153,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		LogIndex:     nextIndex,
 		Term:         status.Term,
 		LeaderID:     status.NodeID,
+		ReceivedBy:   receivedBy,
 		PaymentID:    req.PaymentID,
 		Amount:       req.Amount,
 		Currency:     req.Currency,
@@ -177,4 +194,38 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		Term:      entry.Term,
 		LeaderID:  entry.LeaderID,
 	})
+}
+
+func (h *handler) forwardPayToLeader(w http.ResponseWriter, r *http.Request, leaderURL string, receivedBy string) {
+	endpoint := strings.TrimRight(leaderURL, "/") + "/pay"
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to reach leader"})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(receivedByHeader, receivedBy)
+
+	resp, err := h.leaderHTTPClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to reach leader"})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to read leader response"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(respBody)
 }

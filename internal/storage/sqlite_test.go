@@ -40,6 +40,9 @@ func TestSQLiteStore_AppendPendingSuccess(t *testing.T) {
 	if stored.LogIndex != entry.LogIndex {
 		t.Fatalf("stored log_index = %d, want %d", stored.LogIndex, entry.LogIndex)
 	}
+	if stored.ReceivedBy != entry.LeaderID {
+		t.Fatalf("stored received_by = %q, want %q", stored.ReceivedBy, entry.LeaderID)
+	}
 }
 
 func TestSQLiteStore_AppendPendingDuplicateRejected(t *testing.T) {

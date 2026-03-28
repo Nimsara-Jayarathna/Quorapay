@@ -30,6 +30,7 @@ type Payment struct {
 	PhysicalTime int64   `json:"physical_time,omitempty"`
 	LogicalTime  int64   `json:"logical_time,omitempty"`
 	CreatedAt    string  `json:"created_at"`
+	ReceivedBy   string  `json:"received_by"`
 	ProcessedBy  string  `json:"processed_by"`
 }
 
@@ -69,7 +70,7 @@ func (s *SQLiteStore) Close() error {
 
 func (s *SQLiteStore) ListPayments(ctx context.Context) ([]Payment, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, processed_by
+		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
 		FROM payments
 		ORDER BY id ASC
 	`)
@@ -91,6 +92,7 @@ func (s *SQLiteStore) ListPayments(ctx context.Context) ([]Payment, error) {
 			&payment.PhysicalTime,
 			&payment.LogicalTime,
 			&payment.CreatedAt,
+			&payment.ReceivedBy,
 			&payment.ProcessedBy,
 		); err != nil {
 			return nil, err
@@ -118,9 +120,13 @@ func (s *SQLiteStore) AppendPending(ctx context.Context, entry replication.LogEn
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	receivedBy := entry.ReceivedBy
+	if strings.TrimSpace(receivedBy) == "" {
+		receivedBy = entry.LeaderID
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO payments (payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, processed_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO payments (payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		entry.PaymentID,
 		entry.LogIndex,
@@ -130,6 +136,7 @@ func (s *SQLiteStore) AppendPending(ctx context.Context, entry replication.LogEn
 		entry.PhysicalTime,
 		entry.LogicalTime,
 		now,
+		receivedBy,
 		entry.LeaderID,
 	)
 	if err != nil {
@@ -174,7 +181,7 @@ func (s *SQLiteStore) CommitByPaymentID(ctx context.Context, paymentID string) e
 func (s *SQLiteStore) GetPaymentByID(ctx context.Context, paymentID string) (Payment, error) {
 	var payment Payment
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, processed_by
+		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
 		FROM payments
 		WHERE payment_id = ?
 	`, paymentID).Scan(
@@ -187,6 +194,7 @@ func (s *SQLiteStore) GetPaymentByID(ctx context.Context, paymentID string) (Pay
 		&payment.PhysicalTime,
 		&payment.LogicalTime,
 		&payment.CreatedAt,
+		&payment.ReceivedBy,
 		&payment.ProcessedBy,
 	)
 	if err != nil {
@@ -213,7 +221,7 @@ func (s *SQLiteStore) ExistsByPaymentID(ctx context.Context, paymentID string) (
 
 func (s *SQLiteStore) ListCommittedAfter(ctx context.Context, logIndex int64) ([]Payment, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, processed_by
+		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
 		FROM payments
 		WHERE status = ? AND log_index > ?
 		ORDER BY log_index ASC, id ASC
@@ -236,6 +244,7 @@ func (s *SQLiteStore) ListCommittedAfter(ctx context.Context, logIndex int64) ([
 			&payment.PhysicalTime,
 			&payment.LogicalTime,
 			&payment.CreatedAt,
+			&payment.ReceivedBy,
 			&payment.ProcessedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scan committed payment row: %w", err)
@@ -262,6 +271,7 @@ func (s *SQLiteStore) migrate() error {
 			physical_time INTEGER DEFAULT 0,
 			logical_time INTEGER DEFAULT 0,
 			created_at TEXT,
+			received_by TEXT,
 			processed_by TEXT
 		)
 	`)
@@ -273,6 +283,9 @@ func (s *SQLiteStore) migrate() error {
 		return err
 	}
 	if err := s.ensureColumnExists("payments", "logical_time", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnExists("payments", "received_by", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
 

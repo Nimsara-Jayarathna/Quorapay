@@ -29,9 +29,10 @@ func (s Status) String() string {
 // LogEntry is the replicated ledger record.
 type LogEntry struct {
 	// Ordering metadata.
-	LogIndex int64  `json:"log_index"`
-	Term     int64  `json:"term"`
-	LeaderID string `json:"leader_id"`
+	LogIndex   int64  `json:"log_index"`
+	Term       int64  `json:"term"`
+	LeaderID   string `json:"leader_id"`
+	ReceivedBy string `json:"received_by,omitempty"`
 
 	// Payment payload.
 	PaymentID string  `json:"payment_id"`
@@ -74,6 +75,7 @@ func (e LogEntry) IsZero() bool {
 	return e.LogIndex == 0 &&
 		e.Term == 0 &&
 		e.LeaderID == "" &&
+		e.ReceivedBy == "" &&
 		e.PaymentID == "" &&
 		e.Amount == 0 &&
 		e.Currency == "" &&
