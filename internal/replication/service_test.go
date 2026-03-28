@@ -9,8 +9,11 @@ import (
 
 type stubLocalLedger struct {
 	appendErr    error
+	commitErr    error
 	lastAppended LogEntry
+	lastCommitID string
 	appendCalls  int
+	commitCalls  int
 }
 
 func (s *stubLocalLedger) AppendPending(_ context.Context, entry LogEntry) error {
@@ -19,8 +22,10 @@ func (s *stubLocalLedger) AppendPending(_ context.Context, entry LogEntry) error
 	return s.appendErr
 }
 
-func (s *stubLocalLedger) CommitByPaymentID(context.Context, string) error {
-	return nil
+func (s *stubLocalLedger) CommitByPaymentID(_ context.Context, paymentID string) error {
+	s.commitCalls++
+	s.lastCommitID = paymentID
+	return s.commitErr
 }
 
 type stubTransport struct {
@@ -83,6 +88,9 @@ func TestReplicationService_ReplicateWithQuorum_LocalAppendInitializesAckCount(t
 	}
 	if ledger.lastAppended.Status != StatusPending {
 		t.Fatalf("appended status = %q, want %q", ledger.lastAppended.Status, StatusPending)
+	}
+	if ledger.commitCalls != 1 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 1", ledger.commitCalls)
 	}
 }
 
@@ -209,6 +217,9 @@ func TestReplicationService_ReplicateWithQuorum_BothFollowersFailNoQuorum(t *tes
 	if result.FollowerResults[0].Error == "" || result.FollowerResults[1].Error == "" {
 		t.Fatalf("expected follower errors to be recorded")
 	}
+	if ledger.commitCalls != 0 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 0", ledger.commitCalls)
+	}
 }
 
 func TestReplicationService_ReplicateWithQuorum_MixedFollowerOutcomesCountAcks(t *testing.T) {
@@ -259,6 +270,97 @@ func TestReplicationService_ReplicateWithQuorum_MixedFollowerOutcomesCountAcks(t
 
 	if transport.appendCalls != len(followers) {
 		t.Fatalf("append calls = %d, want %d", transport.appendCalls, len(followers))
+	}
+	if ledger.commitCalls != 1 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 1", ledger.commitCalls)
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_QuorumReachedCommitsLocally(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "reject"},
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002", "http://node-c:8003"})
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if !result.QuorumReached {
+		t.Fatalf("QuorumReached = false, want true")
+	}
+	if !result.Committed {
+		t.Fatalf("Committed = false, want true")
+	}
+	if ledger.commitCalls != 1 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 1", ledger.commitCalls)
+	}
+	if ledger.lastCommitID != "pay-1" {
+		t.Fatalf("last commit payment id = %q, want %q", ledger.lastCommitID, "pay-1")
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_QuorumNotReachedSkipsLocalCommit(t *testing.T) {
+	ledger := &stubLocalLedger{}
+	transport := &stubTransport{
+		appendErrors: map[string]error{
+			"http://node-b:8002": errors.New("down"),
+			"http://node-c:8003": errors.New("down"),
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002", "http://node-c:8003"})
+	if err != nil {
+		t.Fatalf("ReplicateWithQuorum() error = %v", err)
+	}
+
+	if result.QuorumReached {
+		t.Fatalf("QuorumReached = true, want false")
+	}
+	if result.Committed {
+		t.Fatalf("Committed = true, want false")
+	}
+	if ledger.commitCalls != 0 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 0", ledger.commitCalls)
+	}
+}
+
+func TestReplicationService_ReplicateWithQuorum_LocalCommitFailureAfterQuorumReturnsError(t *testing.T) {
+	commitErr := errors.New("commit failed")
+	ledger := &stubLocalLedger{commitErr: commitErr}
+	transport := &stubTransport{
+		appendResults: map[string]AppendEntriesResponse{
+			"http://node-b:8002": {Success: true},
+			"http://node-c:8003": {Success: false, Message: "reject"},
+		},
+	}
+	svc := NewReplicationService(ledger, transport)
+
+	result, err := svc.ReplicateWithQuorum(context.Background(), baseEntry(), []string{"http://node-b:8002", "http://node-c:8003"})
+	if err == nil {
+		t.Fatalf("ReplicateWithQuorum() expected local commit error")
+	}
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("error = %v, want wrapped commit error", err)
+	}
+
+	if !result.QuorumReached {
+		t.Fatalf("QuorumReached = false, want true")
+	}
+	if result.Committed {
+		t.Fatalf("Committed = true, want false")
+	}
+	if result.AckCount != 2 {
+		t.Fatalf("AckCount = %d, want 2", result.AckCount)
+	}
+	if ledger.commitCalls != 1 {
+		t.Fatalf("CommitByPaymentID calls = %d, want 1", ledger.commitCalls)
 	}
 }
 

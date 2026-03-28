@@ -121,6 +121,15 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 	}
 
 	result.QuorumReached = result.AckCount >= result.RequiredQuorum
+	if !result.QuorumReached {
+		return result, nil
+	}
+
+	if err := s.ledger.CommitByPaymentID(ctx, entry.PaymentID); err != nil {
+		return result, fmt.Errorf("commit payment %s locally after quorum: %w", entry.PaymentID, err)
+	}
+
+	result.Committed = true
 
 	return result, nil
 }
