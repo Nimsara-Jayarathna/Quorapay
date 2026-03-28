@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
+	"quorapay/internal/coordination"
 	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 )
@@ -180,5 +182,71 @@ func (h *handler) internalCommitHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, replication.CommitResponse{
 		Success: true,
 		Message: "commit applied",
+	})
+}
+
+func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	if h.coordinator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, replication.CatchUpResponse{
+			Success: false,
+			Message: "coordinator is not configured",
+		})
+		return
+	}
+
+	status := h.coordinator.CurrentStatus()
+	if status.Role != coordination.RoleLeader {
+		writeJSON(w, http.StatusServiceUnavailable, replication.CatchUpResponse{
+			Success: false,
+			Message: "catch-up source must be leader",
+		})
+		return
+	}
+
+	fromRaw := r.URL.Query().Get("from_log_index")
+	if fromRaw == "" {
+		fromRaw = "0"
+	}
+	fromLogIndex, err := strconv.ParseInt(fromRaw, 10, 64)
+	if err != nil || fromLogIndex < 0 {
+		writeJSON(w, http.StatusBadRequest, replication.CatchUpResponse{
+			Success: false,
+			Message: "from_log_index must be a non-negative integer",
+		})
+		return
+	}
+
+	items, err := h.ledger.ListCommittedAfter(r.Context(), fromLogIndex)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, replication.CatchUpResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	entries := make([]replication.LogEntry, 0, len(items))
+	for _, p := range items {
+		entries = append(entries, replication.LogEntry{
+			LogIndex:     p.LogIndex,
+			LeaderID:     p.ProcessedBy,
+			ReceivedBy:   p.ReceivedBy,
+			PaymentID:    p.PaymentID,
+			Amount:       p.Amount,
+			Currency:     p.Currency,
+			Status:       replication.StatusCommitted,
+			PhysicalTime: p.PhysicalTime,
+			LogicalTime:  p.LogicalTime,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, replication.CatchUpResponse{
+		Success: true,
+		Entries: entries,
 	})
 }
