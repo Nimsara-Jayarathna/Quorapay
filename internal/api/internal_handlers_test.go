@@ -60,6 +60,11 @@ func (s *stubLedgerStore) CommitByPaymentID(_ context.Context, paymentID string)
 	return nil
 }
 
+func (s *stubLedgerStore) ExistsByPaymentID(_ context.Context, paymentID string) (bool, error) {
+	_, exists := s.payments[paymentID]
+	return exists, nil
+}
+
 func TestInternalAppendSuccess(t *testing.T) {
 	h := NewHandler(Config{NodeID: "B", CORSAllowed: "*"}, stubStatusSource{}, newStubLedgerStore())
 

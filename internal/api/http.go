@@ -2,7 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"quorapay/internal/coordination"
 	"quorapay/internal/replication"
@@ -32,6 +36,7 @@ type LedgerStore interface {
 	ListPayments(context.Context) ([]storage.Payment, error)
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
+	ExistsByPaymentID(context.Context, string) (bool, error)
 }
 
 type handler struct {
@@ -78,5 +83,98 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "not implemented"})
+	if h.coordinator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "coordinator is not configured"})
+		return
+	}
+
+	status := h.coordinator.CurrentStatus()
+	if status.Role != coordination.RoleLeader {
+		if status.LeaderURL != "" {
+			http.Redirect(w, r, strings.TrimRight(status.LeaderURL, "/")+"/pay", http.StatusTemporaryRedirect)
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "no leader available"})
+		return
+	}
+
+	var req replication.PaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	if err := req.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
+	exists, err := h.ledger.ExistsByPaymentID(r.Context(), req.PaymentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
+		return
+	}
+	if exists {
+		writeJSON(w, http.StatusOK, replication.PaymentResponse{
+			Status:    "OK",
+			PaymentID: req.PaymentID,
+			Message:   "payment already processed",
+		})
+		return
+	}
+
+	currentLogHead, err := h.coordinator.CurrentLogHead()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+		return
+	}
+	nextIndex := currentLogHead + 1
+	if err := h.coordinator.AdvanceLogHead(nextIndex); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+		return
+	}
+
+	entry := replication.LogEntry{
+		LogIndex:     nextIndex,
+		Term:         status.Term,
+		LeaderID:     status.NodeID,
+		PaymentID:    req.PaymentID,
+		Amount:       req.Amount,
+		Currency:     req.Currency,
+		Status:       replication.StatusPending,
+		PhysicalTime: time.Now().UnixNano(),
+	}
+
+	followerURLs, err := h.coordinator.GetFollowerURLs()
+	if err != nil {
+		log.Printf("failed to fetch follower URLs: %v", err)
+		followerURLs = []string{}
+	}
+
+	if h.replicator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "replicator is not configured"})
+		return
+	}
+
+	result, err := h.replicator.ReplicateWithQuorum(r.Context(), entry, followerURLs)
+	if err != nil {
+		if !result.QuorumReached {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	}
+
+	if !result.QuorumReached {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, replication.PaymentResponse{
+		Status:    "OK",
+		PaymentID: entry.PaymentID,
+		LogIndex:  entry.LogIndex,
+		Term:      entry.Term,
+		LeaderID:  entry.LeaderID,
+	})
 }
