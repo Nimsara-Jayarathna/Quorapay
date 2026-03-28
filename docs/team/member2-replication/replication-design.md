@@ -214,7 +214,8 @@ This approach is well-suited for financial systems where **data correctness is m
 
 ### Replication service
 
-- `ReplicateWithQuorum` implemented end-to-end: local append, follower append fan-out, quorum decision, local commit on quorum, and follower commit fan-out (best effort).
+- `ReplicateWithQuorum` implemented end-to-end: local append, **concurrent** follower append fan-out, quorum decision, local commit on quorum, and follower commit fan-out (best effort).
+- The concurrent follower fan-out uses goroutines and a buffered channel to prevent a slow or failed follower from blocking the quorum decision.
 - Service contracts are defined via `LocalLedger` and `FollowerTransport` interfaces.
 
 ### Coordination accessors

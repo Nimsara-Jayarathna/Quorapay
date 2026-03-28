@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 var ErrQuorumReplicationNotImplemented = errors.New("quorum replication is not implemented yet")
@@ -41,8 +42,9 @@ type QuorumReplicationResult struct {
 
 // ReplicationService orchestrates future quorum replication steps from the leader.
 type ReplicationService struct {
-	ledger    LocalLedger
-	transport FollowerTransport
+	ledger      LocalLedger
+	transport   FollowerTransport
+	transportMu sync.Mutex
 }
 
 func NewReplicationService(ledger LocalLedger, transport FollowerTransport) *ReplicationService {
@@ -100,23 +102,47 @@ func (s *ReplicationService) ReplicateWithQuorum(ctx context.Context, entry LogE
 	result.LocalAppendOK = true
 	result.AckCount = 1
 
+	type appendResult struct {
+		index int
+		ack   bool
+		errMsg string
+	}
+
+	appendResults := make(chan appendResult, len(followerBaseURLs))
+	var wg sync.WaitGroup
+
 	for i, baseURL := range followerBaseURLs {
-		resp, err := s.transport.AppendToFollower(ctx, baseURL, appendReq)
-		if err != nil {
-			result.FollowerResults[i].Error = err.Error()
-			continue
-		}
+		wg.Add(1)
+		go func(idx int, url string) {
+			defer wg.Done()
+			s.transportMu.Lock()
+			resp, err := s.transport.AppendToFollower(ctx, url, appendReq)
+			s.transportMu.Unlock()
+			if err != nil {
+				appendResults <- appendResult{index: idx, ack: false, errMsg: err.Error()}
+				return
+			}
+			if resp.Success {
+				appendResults <- appendResult{index: idx, ack: true}
+				return
+			}
+			msg := resp.Message
+			if msg == "" {
+				msg = "append not acknowledged"
+			}
+			appendResults <- appendResult{index: idx, ack: false, errMsg: msg}
+		}(i, baseURL)
+	}
 
-		if resp.Success {
-			result.FollowerResults[i].AppendAcknowledged = true
+	wg.Wait()
+	close(appendResults)
+
+	for ar := range appendResults {
+		if ar.ack {
+			result.FollowerResults[ar.index].AppendAcknowledged = true
 			result.AckCount++
-			continue
-		}
-
-		if resp.Message != "" {
-			result.FollowerResults[i].Error = resp.Message
 		} else {
-			result.FollowerResults[i].Error = "append not acknowledged"
+			result.FollowerResults[ar.index].Error = ar.errMsg
 		}
 	}
 
