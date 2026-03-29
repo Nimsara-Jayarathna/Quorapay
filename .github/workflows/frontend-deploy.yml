@@ -1,0 +1,137 @@
+name: Frontend CI/CD
+
+on:
+  pull_request:
+    branches: ["CI/CD"]
+  push:
+    branches: ["CI/CD"]
+
+concurrency:
+  group: fe-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  APP_NAME: quorapay-fe
+  FE_WORKDIR: client/web
+
+jobs:
+  build:
+    name: Build Image
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/CI/CD' }}
+    runs-on: ubuntu-latest
+    environment: cicd
+    env:
+      VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+      VITE_NODE_URLS: ${{ vars.VITE_NODE_URLS }}
+      VITE_CLUSTER_SIZE: ${{ vars.VITE_CLUSTER_SIZE }}
+      VITE_NODE_BASE_PORT: ${{ vars.VITE_NODE_BASE_PORT }}
+      VITE_NODE_HOST: ${{ vars.VITE_NODE_HOST }}
+      VITE_DEFAULT_NODE_INDEX: ${{ vars.VITE_DEFAULT_NODE_INDEX }}
+      VITE_BLOCKING_MODAL_TIMEOUT_MS: ${{ vars.VITE_BLOCKING_MODAL_TIMEOUT_MS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive deployment metadata
+        run: |
+          echo "IMAGE_REPO=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          echo "DEPLOY_ENV=cicd" >> "$GITHUB_ENV"
+          echo "CONTAINER_NAME=${APP_NAME}-cicd" >> "$GITHUB_ENV"
+          echo "NETWORK_ALIAS=${APP_NAME}-cicd" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg VITE_API_BASE_URL \
+            --build-arg VITE_NODE_URLS \
+            --build-arg VITE_CLUSTER_SIZE \
+            --build-arg VITE_NODE_BASE_PORT \
+            --build-arg VITE_NODE_HOST \
+            --build-arg VITE_DEFAULT_NODE_INDEX \
+            --build-arg VITE_BLOCKING_MODAL_TIMEOUT_MS \
+            -t "$IMAGE_REPO:$DEPLOY_ENV" \
+            -t "$IMAGE_REPO:${GITHUB_SHA::7}" \
+            -f client/web/Dockerfile \
+            client/web
+
+      - name: Push image
+        run: |
+          docker push "$IMAGE_REPO:$DEPLOY_ENV"
+          docker push "$IMAGE_REPO:${GITHUB_SHA::7}"
+
+  deploy:
+    name: Deploy
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/CI/CD' }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: cicd
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+
+    steps:
+      - name: Derive deployment metadata
+        run: |
+          echo "IMAGE_REPO=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          echo "DEPLOY_ENV=cicd" >> "$GITHUB_ENV"
+          echo "CONTAINER_NAME=${APP_NAME}-cicd" >> "$GITHUB_ENV"
+          echo "NETWORK_ALIAS=${APP_NAME}-cicd" >> "$GITHUB_ENV"
+
+      - name: Install SSH client
+        run: sudo apt-get update && sudo apt-get install -y openssh-client
+
+      - name: Validate SSH settings
+        run: |
+          echo "SSH_HOST=$SSH_HOST"
+          echo "SSH_PORT=$SSH_PORT"
+          if [ -n "${SSH_USER:-}" ]; then
+            echo "SSH_USER set? yes"
+          else
+            echo "SSH_USER set? no"
+          fi
+          echo "SSH_PRIVATE_KEY length: ${#SSH_PRIVATE_KEY}"
+          if [ -z "${SSH_PORT:-}" ] || ! echo "$SSH_PORT" | grep -Eq '^[0-9]+$'; then
+            echo "Invalid SSH_PORT: $SSH_PORT" >&2
+            exit 1
+          fi
+
+      - name: Configure SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy container
+        env:
+          NPM_NET_NAME: ${{ vars.NPM_NET_NAME }}
+        run: |
+          SSH_OPTS="-i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+          ssh $SSH_OPTS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "NPM_NET_NAME='${NPM_NET_NAME:-npm_default}' IMAGE='$IMAGE_REPO:$DEPLOY_ENV' CONTAINER_NAME='$CONTAINER_NAME' NETWORK_ALIAS='$NETWORK_ALIAS' bash -s" <<'EOF'
+          set -euo pipefail
+          if ! docker network inspect "$NPM_NET_NAME" >/dev/null 2>&1; then
+            docker network create --driver bridge "$NPM_NET_NAME"
+          fi
+          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker pull "$IMAGE"
+          docker run -d --name "$CONTAINER_NAME" \
+            --network "$NPM_NET_NAME" \
+            --network-alias "$NETWORK_ALIAS" \
+            --restart unless-stopped \
+            "$IMAGE"
+          EOF
