@@ -17,43 +17,28 @@ Create `.env` from `.env.example`:
 cp .env.example .env
 ```
 
-Variables:
+Variables (required set used by the app):
 
-- `VITE_NODE_URLS` optional comma-separated list of node base URLs.
-- `VITE_CLUSTER_SIZE` optional generated node count when `VITE_NODE_URLS` is not set.
-- `VITE_NODE_BASE_PORT` optional generated base port when `VITE_NODE_URLS` is not set.
-- `VITE_NODE_HOST` optional generated host when `VITE_NODE_URLS` is not set.
+- `VITE_SEED_NODE_URL` seed URL used first for cluster discovery.
+- `VITE_NODE_HOST` host used for incremental fallback scan.
+- `VITE_NODE_BASE_PORT` start port used for incremental fallback scan.
+- `VITE_NODE_PORT_STEP` port step size for incremental fallback scan.
+- `VITE_NODE_SCAN_COUNT` number of ports to probe in fallback scan.
 - `VITE_DEFAULT_NODE_INDEX` default selected node index.
 - `VITE_BLOCKING_MODAL_TIMEOUT_MS` auto-close timeout (ms) for non-loading payment blocking modal states.
-
-Recommended mapping with backend:
-- If backend uses `CLUSTER_SIZE=3|5|7`, set `VITE_CLUSTER_SIZE` to the same value.
+- `VITE_ADMIN_API_BASE_URL` base URL for separate admin service (`/admin/node/{id}/{action}`).
 
 Example:
 
 ```env
-VITE_NODE_URLS="http://localhost:8001,http://localhost:8002,http://localhost:8003"
-VITE_DEFAULT_NODE_INDEX=0
-```
-
-Auto-generated topology example (no explicit list):
-
-```env
-VITE_CLUSTER_SIZE=5
-VITE_NODE_BASE_PORT=8001
+VITE_SEED_NODE_URL=http://localhost:8001
 VITE_NODE_HOST=localhost
-VITE_DEFAULT_NODE_INDEX=0
-VITE_BLOCKING_MODAL_TIMEOUT_MS=3000
-```
-
-7-node UI example:
-
-```env
-VITE_CLUSTER_SIZE=7
 VITE_NODE_BASE_PORT=8001
-VITE_NODE_HOST=localhost
+VITE_NODE_PORT_STEP=1
+VITE_NODE_SCAN_COUNT=7
 VITE_DEFAULT_NODE_INDEX=0
-VITE_BLOCKING_MODAL_TIMEOUT_MS=3000
+VITE_BLOCKING_MODAL_TIMEOUT_MS=1750
+VITE_ADMIN_API_BASE_URL=http://localhost:18090
 ```
 
 ## Run
@@ -72,15 +57,15 @@ npm run preview
 ```
 
 ## Features
-- Node selector populated from environment URLs or generated from cluster env values.
-- Automatic topology discovery from `GET /cluster/nodes` so UI adapts when active node count changes.
+- Node selector with automatic cluster discovery via `GET /cluster/nodes`.
+- Incremental fallback scan based on host/port env values when discovery seed fails.
 - Node status fetch from `GET /status`.
-- Local-only node termination via `POST /admin/shutdown` for failover testing.
+- Node lifecycle control via separate admin service (`POST /admin/node/{id}/{start|stop|restart}`) with bearer token.
 - Payment submission to `POST /pay` with generated UUID support.
 - Ledger viewer from `GET /ledger` with status filter.
 - Clear unreachable-node and API error states.
 
 ## Notes
 - This project does not mock backend behavior.
-- Endpoints are called directly against running Quorapay node services.
-- In the current baseline milestone, `/status`, `/ledger`, and `/admin/shutdown` are available. `POST /pay` is still a future milestone and will return an error until payment processing is implemented.
+- Endpoints are called directly against running Quorapay services.
+- Node business APIs and admin-control APIs are intentionally separated.

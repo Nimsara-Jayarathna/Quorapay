@@ -50,9 +50,11 @@ export type LedgerResponse = {
   items: LedgerItem[];
 };
 
-export type ShutdownResponse = {
-  message: string;
-  node_id?: string;
+export type AdminNodeActionResponse = {
+  status: "OK" | string;
+  node_id: string;
+  action: "start" | "stop" | "restart" | string;
+  output?: string;
 };
 
 export type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";

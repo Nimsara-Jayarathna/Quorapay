@@ -32,6 +32,7 @@ jobs:
       VITE_NODE_HOST: ${{ vars.VITE_NODE_HOST }}
       VITE_DEFAULT_NODE_INDEX: ${{ vars.VITE_DEFAULT_NODE_INDEX }}
       VITE_BLOCKING_MODAL_TIMEOUT_MS: ${{ vars.VITE_BLOCKING_MODAL_TIMEOUT_MS }}
+      VITE_ADMIN_API_BASE_URL: ${{ vars.VITE_ADMIN_API_BASE_URL }}
 
     steps:
       - name: Checkout
@@ -61,6 +62,7 @@ jobs:
             --build-arg VITE_NODE_HOST \
             --build-arg VITE_DEFAULT_NODE_INDEX \
             --build-arg VITE_BLOCKING_MODAL_TIMEOUT_MS \
+            --build-arg VITE_ADMIN_API_BASE_URL \
             -t "$IMAGE_REPO:$DEPLOY_ENV" \
             -t "$IMAGE_REPO:${GITHUB_SHA::7}" \
             -f client/web/Dockerfile \

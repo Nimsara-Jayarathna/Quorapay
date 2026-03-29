@@ -64,28 +64,6 @@ func (h *handler) ledgerHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *handler) shutdownHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
-		return
-	}
-
-	if h.cfg.RequestShutdown == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "shutdown is not configured"})
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"message": "shutdown scheduled",
-		"node_id": h.cfg.NodeID,
-	})
-
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		h.cfg.RequestShutdown("requested by /admin/shutdown")
-	}()
-}
-
 func (h *handler) internalAppendHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})

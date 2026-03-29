@@ -3,10 +3,11 @@ import { NodeStatus } from "../lib/api";
 type NodeStatusPanelProps = {
   status: NodeStatus | null;
   statusLoading: boolean;
-  shutdownLoading: boolean;
+  nodeActionLoading: boolean;
   shutdownMessage: string | null;
+  selectedNodeId: string;
   onRefreshStatus: () => void;
-  onRequestTerminate: () => void;
+  onNodeAction: (action: "stop" | "restart", nodeId: string) => void;
 };
 
 function getFaultStateClasses(state: string | undefined): string {
@@ -38,11 +39,14 @@ function getRoleClasses(role: string | undefined): string {
 function NodeStatusPanel({
   status,
   statusLoading,
-  shutdownLoading,
+  nodeActionLoading,
   shutdownMessage,
+  selectedNodeId,
   onRefreshStatus,
-  onRequestTerminate,
+  onNodeAction,
 }: NodeStatusPanelProps) {
+  const operatingNodeId = selectedNodeId || "-";
+
   const infoRowsLeft = [
     { label: "Node ID", value: status?.node_id ?? "-" },
     { label: "Leader ID", value: status?.leader_id ?? "-" },
@@ -87,11 +91,19 @@ function NodeStatusPanel({
           </button>
           <button
             type="button"
-            onClick={onRequestTerminate}
-            disabled={shutdownLoading}
+            onClick={() => onNodeAction("stop", operatingNodeId)}
+            disabled={nodeActionLoading || !selectedNodeId}
             className="rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {shutdownLoading ? "Stopping..." : "Terminate Selected Node"}
+            {nodeActionLoading ? "Applying..." : `Kill ${operatingNodeId}`}
+          </button>
+          <button
+            type="button"
+            onClick={() => onNodeAction("restart", operatingNodeId)}
+            disabled={nodeActionLoading || !selectedNodeId}
+            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {nodeActionLoading ? "Applying..." : `Restart ${operatingNodeId}`}
           </button>
         </div>
       </div>

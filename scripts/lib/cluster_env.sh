@@ -5,6 +5,24 @@
 # 1) NODES (explicit override)
 # 2) CLUSTER_SIZE (odd number >= 3)
 
+ROOT_DIR="${ROOT_DIR:-$(pwd)}"
+COMMON_ENV_FILE="${COMMON_ENV_FILE:-$ROOT_DIR/.env.common}"
+NODE_ENV_FILE="${NODE_ENV_FILE:-$ROOT_DIR/.env.node}"
+
+if [ -f "$COMMON_ENV_FILE" ]; then
+	set -a
+	# shellcheck disable=SC1090
+	. "$COMMON_ENV_FILE"
+	set +a
+fi
+
+if [ -f "$NODE_ENV_FILE" ]; then
+	set -a
+	# shellcheck disable=SC1090
+	. "$NODE_ENV_FILE"
+	set +a
+fi
+
 resolve_nodes_from_size() {
 	size="${CLUSTER_SIZE:-3}"
 	base_port="${CLUSTER_BASE_PORT:-8001}"

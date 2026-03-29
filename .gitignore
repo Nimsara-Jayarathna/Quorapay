@@ -6,4 +6,13 @@ data/
 *.db-shm
 node_modules/
 dist/
+
+# Env files: keep only *.example in git
 .env
+.env.*
+!.env.example
+!.env.*.example
+client/web/.env
+client/web/.env.*
+!client/web/.env.example
+!client/web/.env.*.example

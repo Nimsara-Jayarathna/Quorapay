@@ -29,7 +29,6 @@ type Config struct {
 	MaxMessageAgeMS  int64
 	MaxFutureDriftMS int64
 	LeaderHTTPClient *http.Client
-	RequestShutdown  func(reason string)
 }
 
 type Coordinator interface {
@@ -117,7 +116,6 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
 	mux.HandleFunc("/cluster/nodes", h.clusterNodesHandler)
-	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
 }
 

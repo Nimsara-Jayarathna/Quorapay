@@ -3,6 +3,19 @@
 ## Overview
 Helper scripts for developer workflows and reproducible demos. Scripts should improve local productivity without embedding core runtime logic.
 
+## Environment Files
+- Shared topology: `.env.common`
+- Node runtime: `.env.node`
+- Admin runtime: `.env.admin`
+- Commented templates:
+  - `.env.common.example`
+  - `.env.node.example`
+  - `.env.admin.example`
+
+Default load behavior:
+- Node scripts (`run-nodes.sh`, `run-node.sh`) load `.env.common` and `.env.node`.
+- Admin script (`run-admin.sh`) loads `.env.common` then `.env.admin`.
+
 ## Contents
 - Cluster startup and shutdown helpers.
 - Failure simulation utilities for demo scenarios.
@@ -20,18 +33,36 @@ Helper scripts for developer workflows and reproducible demos. Scripts should im
 - Optional override: set `NODES` directly to any custom mapping.
 
 ## Startup Recipes
+- Configure topology in `.env.common` (no CLI `CLUSTER_SIZE=...` required).
 - 3 nodes:
-  - `CLUSTER_SIZE=3 ./scripts/run-zk.sh`
-  - `CLUSTER_SIZE=3 ./scripts/run-nodes.sh`
+  - set `CLUSTER_SIZE=3` in `.env.common`
+  - `./scripts/run-zk.sh`
+  - `./scripts/run-nodes.sh`
 - 5 nodes:
-  - `CLUSTER_SIZE=5 ./scripts/run-zk.sh`
-  - `CLUSTER_SIZE=5 ./scripts/run-nodes.sh`
+  - set `CLUSTER_SIZE=5` in `.env.common`
+  - `./scripts/run-zk.sh`
+  - `./scripts/run-nodes.sh`
 - 7 nodes:
-  - `CLUSTER_SIZE=7 ./scripts/run-zk.sh`
-  - `CLUSTER_SIZE=7 ./scripts/run-nodes.sh`
+  - set `CLUSTER_SIZE=7` in `.env.common`
+  - `./scripts/run-zk.sh`
+  - `./scripts/run-nodes.sh`
 
 Stop cluster:
-- `CLUSTER_SIZE=<same-size> ./scripts/stop-nodes.sh`
+- `./scripts/stop-nodes.sh`
+
+Admin control service:
+- Start: `./scripts/run-admin.sh`
+- Stop: `./scripts/stop-admin.sh`
+- Default port: `8090` (override with `ADMIN_PORT`)
+- Uses separate env file: `.env.admin` (override path via `ADMIN_ENV_FILE=/path/to/file ./scripts/run-admin.sh`)
+- `run-admin.sh` loads `.env.common` first (cluster topology), then `.env.admin` (admin overrides)
+- CORS origins for browser calls: `ADMIN_CORS_ALLOWED_ORIGINS` (default `http://localhost:5173`)
+- APIs:
+  - `POST http://localhost:8090/admin/node/{id}/start`
+  - `POST http://localhost:8090/admin/node/{id}/stop`
+  - `POST http://localhost:8090/admin/node/{id}/restart`
+  - Optional auth: `Authorization: Bearer $ADMIN_API_TOKEN`
+
 - Member 4 related checks:
   - `./scripts/tests/test-election-consensus.sh`
   - `./scripts/tests/test-zk-outage-recovery.sh`

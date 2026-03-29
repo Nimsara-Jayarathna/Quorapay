@@ -3,11 +3,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import LedgerTable from "./components/LedgerTable";
 import NodeStatusPanel from "./components/NodeStatusPanel";
 import NodeTabs from "./components/NodeTabs";
+import NodeManagementModal from "./components/NodeManagementModal";
+import NodeActionModal from "./components/NodeActionModal";
 import NoNodesConnectedModal from "./components/NoNodesConnectedModal";
 import PaymentActionModal from "./components/PaymentActionModal";
 import PaymentForm from "./components/PaymentForm";
-import ShutdownConfirmModal from "./components/ShutdownConfirmModal";
 import {
+  AdminNodeActionResponse,
   fetchJson,
   fetchClusterNodes,
   getErrorMessage,
@@ -15,22 +17,21 @@ import {
   NodeStatus,
   PaymentRequest,
   PaymentResponse,
-  ShutdownResponse,
   StatusFilter,
 } from "./lib/api";
 
-const configuredNodeUrls = (import.meta.env.VITE_NODE_URLS as string | undefined)
-  ?.split(",")
-  .map((url) => url.trim())
-  .filter(Boolean) ?? [];
-
-const configuredClusterSize = Number(import.meta.env.VITE_CLUSTER_SIZE ?? "3");
-const clusterSize = Number.isInteger(configuredClusterSize) && configuredClusterSize > 0 ? configuredClusterSize : 3;
+const configuredSeedNodeUrl = (import.meta.env.VITE_SEED_NODE_URL as string | undefined)?.trim() || "";
 const configuredBasePort = Number(import.meta.env.VITE_NODE_BASE_PORT ?? "8001");
 const basePort = Number.isInteger(configuredBasePort) && configuredBasePort > 0 ? configuredBasePort : 8001;
+const configuredPortStep = Number(import.meta.env.VITE_NODE_PORT_STEP ?? "1");
+const portStep = Number.isInteger(configuredPortStep) && configuredPortStep > 0 ? configuredPortStep : 1;
+const configuredScanCount = Number(import.meta.env.VITE_NODE_SCAN_COUNT ?? "3");
+const scanCount = Number.isInteger(configuredScanCount) && configuredScanCount > 0 ? configuredScanCount : 3;
 const configuredHost = (import.meta.env.VITE_NODE_HOST as string | undefined)?.trim() || window.location.hostname || "localhost";
-const generatedNodeUrls = Array.from({ length: clusterSize }, (_, index) => `http://${configuredHost}:${basePort + index}`);
-const initialNodeUrls = configuredNodeUrls.length > 0 ? configuredNodeUrls : generatedNodeUrls;
+const generatedNodeUrls = Array.from({ length: scanCount }, (_, index) => `http://${configuredHost}:${basePort + index * portStep}`);
+const initialNodeUrls = configuredSeedNodeUrl
+  ? [configuredSeedNodeUrl, ...generatedNodeUrls.filter((url) => url !== configuredSeedNodeUrl)]
+  : generatedNodeUrls;
 
 const configuredDefaultIndex = Number(import.meta.env.VITE_DEFAULT_NODE_INDEX ?? "0");
 const defaultNodeIndex =
@@ -42,6 +43,7 @@ const blockingModalTimeoutMS =
   Number.isInteger(configuredBlockingModalTimeoutMS) && configuredBlockingModalTimeoutMS >= 0
     ? configuredBlockingModalTimeoutMS
     : 3000;
+const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
 
 function generatePaymentId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -80,8 +82,16 @@ function App() {
 
   const [shutdownLoading, setShutdownLoading] = useState(false);
   const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
-  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
   const shutdownMessageTimeoutRef = useRef<number | null>(null);
+  const [adminToken, setAdminToken] = useState<string>(() => window.localStorage.getItem("quorapay_admin_token") ?? "");
+  const [nodeManagementOpen, setNodeManagementOpen] = useState(false);
+  const [nodeManagementAction, setNodeManagementAction] = useState<"start" | "stop" | "restart">("start");
+  const [nodeManagementTargetNodeId, setNodeManagementTargetNodeId] = useState("A");
+  const [nodeActionModalOpen, setNodeActionModalOpen] = useState(false);
+  const [nodeActionModalState, setNodeActionModalState] = useState<"loading" | "success" | "error" | "info">("loading");
+  const [nodeActionModalTitle, setNodeActionModalTitle] = useState("Applying Node Action");
+  const [nodeActionModalMessage, setNodeActionModalMessage] = useState("Sending request...");
+  const nodeActionModalTimeoutRef = useRef<number | null>(null);
 
   const filteredLedgerItems = useMemo(() => {
     if (statusFilter === "ALL") {
@@ -91,7 +101,7 @@ function App() {
   }, [ledgerItems, statusFilter]);
 
   const refreshTopology = useCallback(async () => {
-    const seeds = Array.from(new Set([...nodeUrls, ...configuredNodeUrls, ...generatedNodeUrls]));
+    const seeds = Array.from(new Set([...nodeUrls, ...generatedNodeUrls]));
     for (const seed of seeds) {
       try {
         const discoveredUrls = await fetchClusterNodes(seed);
@@ -114,7 +124,7 @@ function App() {
   const refreshStatus = useCallback(async () => {
     if (!selectedNodeUrl) {
       setStatus(null);
-      setStatusError("Node unreachable: no node URL configured. Check VITE_NODE_URLS.");
+      setStatusError("Node unreachable: no node URL configured. Check VITE_SEED_NODE_URL and scan settings.");
       return;
     }
 
@@ -156,7 +166,7 @@ function App() {
   const refreshLedger = useCallback(async () => {
     if (!selectedNodeUrl) {
       setLedgerItems([]);
-      setLedgerError("No node URL configured. Check VITE_NODE_URLS.");
+      setLedgerError("No node URL configured. Check VITE_SEED_NODE_URL and scan settings.");
       return;
     }
 
@@ -194,7 +204,7 @@ function App() {
     };
 
     if (!selectedNodeUrl) {
-      const message = "No node URL configured. Check VITE_NODE_URLS.";
+      const message = "No node URL configured. Check VITE_SEED_NODE_URL and scan settings.";
       setPaymentError(message);
       showPaymentModal("error", "Payment Failed", message);
       return;
@@ -254,23 +264,94 @@ function App() {
     }
   }
 
-  function handleShutdownSelectedNode() {
-    if (!selectedNodeUrl) {
-      setShutdownMessage("No node URL configured. Check VITE_NODE_URLS.");
+  const selectedNodeId =
+    status?.node_id ||
+    nodeMetaByUrl[selectedNodeUrl]?.nodeId ||
+    "";
+
+  const knownNodeIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          Object.values(nodeMetaByUrl)
+            .map((meta) => (meta.nodeId || "").trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ),
+    [nodeMetaByUrl],
+  );
+
+  useEffect(() => {
+    if (nodeManagementAction === "start") {
+      const firstStartable = Array.from({ length: 26 }, (_, idx) => String.fromCharCode(65 + idx)).find((id) => !knownNodeIds.includes(id));
+      if (!firstStartable) {
+        setNodeManagementTargetNodeId("A");
+        return;
+      }
+      if (!nodeManagementTargetNodeId || knownNodeIds.includes(nodeManagementTargetNodeId)) {
+        setNodeManagementTargetNodeId(firstStartable);
+      }
       return;
     }
+    if (knownNodeIds.length > 0 && !knownNodeIds.includes(nodeManagementTargetNodeId)) {
+      setNodeManagementTargetNodeId(knownNodeIds[0]);
+    }
+  }, [knownNodeIds, nodeManagementAction, nodeManagementTargetNodeId]);
 
-    setShowShutdownConfirm(true);
-  }
+  const openNodeManagement = useCallback(
+    (action: "start" | "stop" | "restart") => {
+      setNodeManagementAction(action);
+      if (action === "start") {
+        const firstStartable = Array.from({ length: 26 }, (_, idx) => String.fromCharCode(65 + idx)).find((id) => !knownNodeIds.includes(id));
+        setNodeManagementTargetNodeId(firstStartable || "A");
+      } else {
+        setNodeManagementTargetNodeId(selectedNodeId || knownNodeIds[0] || "");
+      }
+      setNodeManagementOpen(true);
+    },
+    [knownNodeIds, selectedNodeId],
+  );
 
-  async function confirmShutdownSelectedNode() {
-    if (!selectedNodeUrl) {
-      setShutdownMessage("No node URL configured. Check VITE_NODE_URLS.");
-      setShowShutdownConfirm(false);
+  async function handleNodeAction(action: "start" | "stop" | "restart", nodeId: string) {
+    const targetNodeId = nodeId.trim().toUpperCase();
+    const actionLabel = action === "start" ? "Start" : action === "stop" ? "Terminate" : "Restart";
+    const showNodeActionModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
+      if (nodeActionModalTimeoutRef.current !== null) {
+        window.clearTimeout(nodeActionModalTimeoutRef.current);
+        nodeActionModalTimeoutRef.current = null;
+      }
+      setNodeActionModalState(state);
+      setNodeActionModalTitle(title);
+      setNodeActionModalMessage(message);
+      setNodeActionModalOpen(true);
+      if (state !== "loading") {
+        nodeActionModalTimeoutRef.current = window.setTimeout(() => {
+          setNodeActionModalOpen(false);
+          nodeActionModalTimeoutRef.current = null;
+        }, blockingModalTimeoutMS);
+      }
+    };
+
+    if (!targetNodeId) {
+      setShutdownMessage("Node ID is required.");
+      return;
+    }
+    if (!/^[A-Z]$/.test(targetNodeId)) {
+      setShutdownMessage("Node ID must be a single letter (A-Z).");
+      return;
+    }
+    if (action !== "start" && knownNodeIds.length > 0 && !knownNodeIds.includes(targetNodeId)) {
+      setShutdownMessage(`Unknown node ID: ${targetNodeId}.`);
+      return;
+    }
+    if (!adminToken.trim()) {
+      setShutdownMessage("Admin token is required.");
       return;
     }
 
     setShutdownLoading(true);
+    showNodeActionModal("loading", `${actionLabel} Node`, `Applying ${action} on node ${targetNodeId}...`);
+    setNodeManagementOpen(false);
     if (shutdownMessageTimeoutRef.current !== null) {
       window.clearTimeout(shutdownMessageTimeoutRef.current);
       shutdownMessageTimeoutRef.current = null;
@@ -278,22 +359,28 @@ function App() {
     setShutdownMessage(null);
 
     try {
-      const result = await fetchJson<ShutdownResponse>(`${selectedNodeUrl}/admin/shutdown`, {
+      const result = await fetchJson<AdminNodeActionResponse>(`${adminApiBaseUrl}/admin/node/${targetNodeId}/${action}`, {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${adminToken.trim()}`,
+        },
       });
-      setShutdownMessage(result.message || "Shutdown scheduled.");
+      setShutdownMessage(`Node ${result.node_id} ${result.action} requested.`);
+      showNodeActionModal("success", `${actionLabel} Requested`, `Node ${result.node_id} ${result.action} requested.`);
       shutdownMessageTimeoutRef.current = window.setTimeout(() => {
         setShutdownMessage(null);
         shutdownMessageTimeoutRef.current = null;
       }, 3000);
       window.setTimeout(() => {
         void refreshStatus();
+        void refreshNodeMeta();
       }, 600);
     } catch (error) {
-      setShutdownMessage(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setShutdownMessage(message);
+      showNodeActionModal("error", `${actionLabel} Failed`, message);
     } finally {
       setShutdownLoading(false);
-      setShowShutdownConfirm(false);
     }
   }
 
@@ -332,24 +419,42 @@ function App() {
       if (shutdownMessageTimeoutRef.current !== null) {
         window.clearTimeout(shutdownMessageTimeoutRef.current);
       }
+      if (nodeActionModalTimeoutRef.current !== null) {
+        window.clearTimeout(nodeActionModalTimeoutRef.current);
+      }
     },
     [],
   );
 
   return (
     <div className="relative">
-      <ShutdownConfirmModal
-        open={showShutdownConfirm}
-        nodeUrl={selectedNodeUrl}
-        loading={shutdownLoading}
-        onCancel={() => setShowShutdownConfirm(false)}
-        onConfirm={() => void confirmShutdownSelectedNode()}
-      />
       <PaymentActionModal
         open={paymentModalOpen}
         state={paymentModalState}
         title={paymentModalTitle}
         message={paymentModalMessage}
+      />
+      <NodeManagementModal
+        open={nodeManagementOpen}
+        action={nodeManagementAction}
+        targetNodeId={nodeManagementTargetNodeId}
+        knownNodeIds={knownNodeIds}
+        adminToken={adminToken}
+        loading={shutdownLoading}
+        message={shutdownMessage}
+        onClose={() => setNodeManagementOpen(false)}
+        onTargetNodeIdChange={(value) => setNodeManagementTargetNodeId(value.trim().toUpperCase())}
+        onAdminTokenChange={(value) => {
+          setAdminToken(value);
+          window.localStorage.setItem("quorapay_admin_token", value);
+        }}
+        onConfirm={() => void handleNodeAction(nodeManagementAction, nodeManagementTargetNodeId)}
+      />
+      <NodeActionModal
+        open={nodeActionModalOpen}
+        state={nodeActionModalState}
+        title={nodeActionModalTitle}
+        message={nodeActionModalMessage}
       />
       <NoNodesConnectedModal
         open={noNodesConnected}
@@ -376,6 +481,7 @@ function App() {
             selectedNodeIndex={selectedNodeIndex}
             onSelectNode={setSelectedNodeIndex}
             nodeMetaByUrl={nodeMetaByUrl}
+            onOpenNodeManagement={openNodeManagement}
           />
 
           <div className="grid items-stretch gap-6 xl:grid-cols-12">
@@ -383,10 +489,11 @@ function App() {
               <NodeStatusPanel
                 status={status}
                 statusLoading={statusLoading}
-                shutdownLoading={shutdownLoading}
+                nodeActionLoading={shutdownLoading}
                 shutdownMessage={shutdownMessage}
+                selectedNodeId={selectedNodeId}
                 onRefreshStatus={() => void refreshStatus()}
-                onRequestTerminate={handleShutdownSelectedNode}
+                onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
               />
             </div>
 

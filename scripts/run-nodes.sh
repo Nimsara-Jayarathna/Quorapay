@@ -8,8 +8,6 @@ LOG_DIR="$ROOT_DIR/data/logs"
 GO_CACHE_DIR="$ROOT_DIR/data/.gocache"
 BIN_DIR="$ROOT_DIR/data/bin"
 NODE_BIN="$BIN_DIR/quorapay-node"
-ENV_FILE="$ROOT_DIR/.env"
-
 . "$ROOT_DIR/scripts/lib/cluster_env.sh"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
@@ -17,13 +15,6 @@ mkdir -p "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
 if ! command -v go >/dev/null 2>&1; then
 	echo "go is required but was not found on PATH" >&2
 	exit 1
-fi
-
-if [ -f "$ENV_FILE" ]; then
-	set -a
-	# shellcheck disable=SC1090
-	. "$ENV_FILE"
-	set +a
 fi
 
 ZK_ADDR="${ZK_ADDR:-localhost:2181}"

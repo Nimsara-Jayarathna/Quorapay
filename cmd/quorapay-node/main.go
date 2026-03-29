@@ -35,7 +35,6 @@ type config struct {
 func main() {
 	cfg := loadConfig()
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC|log.Lmicroseconds)
-	shutdownCh := make(chan string, 1)
 
 	store, err := storage.NewSQLiteStore(cfg.StoragePath)
 	if err != nil {
@@ -79,12 +78,6 @@ func main() {
 		SkewRejectMS:     cfg.SkewRejectMS,
 		MaxMessageAgeMS:  cfg.MaxMessageAgeMS,
 		MaxFutureDriftMS: cfg.MaxFutureDriftMS,
-		RequestShutdown: func(reason string) {
-			select {
-			case shutdownCh <- reason:
-			default:
-			}
-		},
 	}, coord, store, replService)
 
 	server := &http.Server{
@@ -109,8 +102,6 @@ func main() {
 		logger.Printf("shutdown signal received: %s", sig.String())
 	case serveErr := <-errCh:
 		logger.Printf("http server failed: %v", serveErr)
-	case reason := <-shutdownCh:
-		logger.Printf("shutdown requested via admin endpoint: %s", reason)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
