@@ -112,8 +112,16 @@ jobs:
       - name: Configure SSH key
         run: |
           mkdir -p ~/.ssh
-          printf '%s' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if printf '%s' "$SSH_PRIVATE_KEY" | grep -q "BEGIN OPENSSH PRIVATE KEY\|BEGIN RSA PRIVATE KEY\|BEGIN EC PRIVATE KEY"; then
+            # Handle both real multiline and escaped "\\n" secrets.
+            printf '%s' "$SSH_PRIVATE_KEY" | sed 's/\\n/\
+/g' | sed 's/\r$//' > ~/.ssh/id_ed25519
+          else
+            # Fallback: secret stored as base64-encoded private key.
+            printf '%s' "$SSH_PRIVATE_KEY" | base64 -d > ~/.ssh/id_ed25519
+          fi
           chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
           ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy container
