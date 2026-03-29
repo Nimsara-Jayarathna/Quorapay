@@ -112,16 +112,26 @@ jobs:
       - name: Configure SSH key
         run: |
           mkdir -p ~/.ssh
-          if printf '%s' "$SSH_PRIVATE_KEY" | grep -q "BEGIN OPENSSH PRIVATE KEY\|BEGIN RSA PRIVATE KEY\|BEGIN EC PRIVATE KEY"; then
-            # Handle both real multiline and escaped "\\n" secrets.
-            printf '%s' "$SSH_PRIVATE_KEY" | sed 's/\\n/\
-/g' | sed 's/\r$//' > ~/.ssh/id_ed25519
-          else
-            # Fallback: secret stored as base64-encoded private key.
-            printf '%s' "$SSH_PRIVATE_KEY" | base64 -d > ~/.ssh/id_ed25519
+          RAW_KEY="$SSH_PRIVATE_KEY"
+
+          # If secret contains literal "\\n", convert to real newlines.
+          if printf '%s' "$RAW_KEY" | grep -q '\\n'; then
+            RAW_KEY="$(printf '%s' "$RAW_KEY" | sed 's/\\n/'"$'\n'"'/g')"
           fi
+
+          # Normalize CRLF and ensure newline at EOF.
+          printf '%s\n' "$RAW_KEY" | sed 's/\r$//' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+          echo "SSH key bytes: $(wc -c < ~/.ssh/id_ed25519)"
+          echo "SSH key begin line: $(head -n 1 ~/.ssh/id_ed25519)"
+          echo "SSH key end line: $(tail -n 1 ~/.ssh/id_ed25519)"
+
+          if ! ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
+            echo "Invalid SSH private key format in SSH_PRIVATE_KEY secret" >&2
+            exit 1
+          fi
+
           ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy container
