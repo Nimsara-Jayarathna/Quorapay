@@ -2,17 +2,22 @@
 
 set -eu
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-90}"
 POLL_SECONDS="${POLL_SECONDS:-1}"
 
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
 port_for_node() {
-	case "$1" in
-		A) echo "8001" ;;
-		B) echo "8002" ;;
-		C) echo "8003" ;;
-		*) echo "" ;;
-	esac
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		id=$(echo "$spec" | cut -d: -f1)
+		port=$(echo "$spec" | cut -d: -f2)
+		if [ "$id" = "$1" ]; then
+			echo "$port"
+			return 0
+		fi
+	done
+	echo ""
 }
 
 extract_string() {
@@ -32,7 +37,8 @@ find_single_leader() {
 	leader_id=""
 	leader_term=""
 
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		json=$(status_for_port "$port")
 		if [ -z "$json" ]; then
 			continue

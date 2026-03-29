@@ -10,35 +10,33 @@ BIN_DIR="$ROOT_DIR/data/bin"
 NODE_BIN="$BIN_DIR/quorapay-node"
 ENV_FILE="$ROOT_DIR/.env"
 
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
 if [ $# -ne 1 ]; then
-	echo "usage: ./scripts/run-node.sh <A|B|C>" >&2
+	echo "usage: ./scripts/run-node.sh <NODE_ID>" >&2
 	exit 1
 fi
 
-NODE_ID="$1"
-case "$NODE_ID" in
-	A|a)
-		NODE_ID="A"
-		PORT="8001"
-		STORAGE_PATH="./data/nodeA/ledger.db"
-		;;
-	B|b)
-		NODE_ID="B"
-		PORT="8002"
-		STORAGE_PATH="./data/nodeB/ledger.db"
-		;;
-	C|c)
-		NODE_ID="C"
-		PORT="8003"
-		STORAGE_PATH="./data/nodeC/ledger.db"
-		;;
-	*)
-		echo "unknown node '$NODE_ID'; expected A, B, or C" >&2
-		exit 1
-		;;
-esac
+REQ_NODE_ID=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+NODE_ID=""
+PORT=""
+for spec in $(echo "$NODES" | tr ',' ' '); do
+	id=$(echo "$spec" | cut -d: -f1)
+	port=$(echo "$spec" | cut -d: -f2)
+	if [ "$id" = "$REQ_NODE_ID" ]; then
+		NODE_ID="$id"
+		PORT="$port"
+		break
+	fi
+done
+if [ -z "$NODE_ID" ] || [ -z "$PORT" ]; then
+	echo "unknown node '$REQ_NODE_ID'; not found in NODES='$NODES'" >&2
+	exit 1
+fi
+STORAGE_PATH="./data/node$NODE_ID/ledger.db"
 
-mkdir -p "$ROOT_DIR/data/nodeA" "$ROOT_DIR/data/nodeB" "$ROOT_DIR/data/nodeC" "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
+mkdir -p "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
+mkdir -p "$ROOT_DIR/data/node$NODE_ID"
 
 if ! command -v go >/dev/null 2>&1; then
 	echo "go is required but was not found on PATH" >&2

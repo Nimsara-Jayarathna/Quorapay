@@ -10,7 +10,9 @@ BIN_DIR="$ROOT_DIR/data/bin"
 NODE_BIN="$BIN_DIR/quorapay-node"
 ENV_FILE="$ROOT_DIR/.env"
 
-mkdir -p "$ROOT_DIR/data/nodeA" "$ROOT_DIR/data/nodeB" "$ROOT_DIR/data/nodeC" "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
+
+mkdir -p "$PID_DIR" "$LOG_DIR" "$GO_CACHE_DIR" "$BIN_DIR"
 
 if ! command -v go >/dev/null 2>&1; then
 	echo "go is required but was not found on PATH" >&2
@@ -55,6 +57,15 @@ start_node() {
 	echo "started node $NODE_ID on port $PORT (pid $(cat "$PID_FILE"))"
 }
 
-start_node "A" "8001" "./data/nodeA/ledger.db"
-start_node "B" "8002" "./data/nodeB/ledger.db"
-start_node "C" "8003" "./data/nodeC/ledger.db"
+for spec in $(echo "$NODES" | tr ',' ' '); do
+	NODE_ID=$(echo "$spec" | cut -d: -f1)
+	PORT=$(echo "$spec" | cut -d: -f2)
+	if [ -z "$NODE_ID" ] || [ -z "$PORT" ]; then
+		echo "invalid NODES entry: '$spec' (expected NODE_ID:PORT)" >&2
+		exit 1
+	fi
+
+	STORAGE_PATH="./data/node$NODE_ID/ledger.db"
+	mkdir -p "$ROOT_DIR/data/node$NODE_ID"
+	start_node "$NODE_ID" "$PORT" "$STORAGE_PATH"
+done

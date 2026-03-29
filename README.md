@@ -18,15 +18,14 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 
 ## Repository Layout
 
-- `client/`: Client-facing interfaces (`cli/`, `web/`) for driving and observing prototype behavior.
-- `cmd/quorapay-node/`: Node service entrypoint location.
-- `configs/`: Node instance and ZooKeeper environment configuration.
-- `deployments/`: Deployment and environment assets for demos.
-- `docs/`: Architecture, protocol, testing, evaluation, and team-specific working documents.
-- `internal/`: Core domain modules (`api`, `coordination`, `replication`, `storage`, `timesync`, `consensus`).
-- `scripts/`: Developer automation scripts.
-- `test/`: Smoke and failure-focused test suites.
-- `tools/`: Auxiliary tooling used by development and evaluation workflows.
+- `client/web/`: React web client for payment submission, status inspection, and ledger viewing.
+- `client/cli/`: CLI client for payment submission and status inspection.
+- `data/`: Runtime artifacts (SQLite DBs, logs, pids); generated locally.
+- `docs/`: Architecture, protocol, testing, evaluation, and team/consensus working documents.
+- `docs/`: Team documentation and consensus notes.
+- `internal/`: Core backend modules (API, coordination, replication, storage, time sync, consensus).
+- `scripts/`: Local automation for ZooKeeper, node lifecycle, and test scenarios.
+- `go.mod`, `go.sum`: Go module dependency definitions.
 
 ## Typical Demo Flow
 
@@ -37,6 +36,37 @@ Quorapay is a fault-tolerant distributed payment system that ensures reliable an
 5. Terminate the leader node process to trigger failover.
 6. Continue submitting requests after leadership recovery.
 7. Verify each node ledger converges to the same committed state.
+
+## Cluster Size Recipes (3, 5, 7)
+
+Cluster topology is modular and controlled by env vars:
+- `CLUSTER_SIZE` (odd integer >= 3, default `3`)
+- `CLUSTER_BASE_PORT` (default `8001`)
+- `NODES` (optional explicit override; if set, it takes priority)
+
+Quick start:
+
+```bash
+# 3 nodes
+CLUSTER_SIZE=3 ./scripts/run-zk.sh
+CLUSTER_SIZE=3 ./scripts/run-nodes.sh
+
+# 5 nodes
+CLUSTER_SIZE=5 ./scripts/run-zk.sh
+CLUSTER_SIZE=5 ./scripts/run-nodes.sh
+
+# 7 nodes
+CLUSTER_SIZE=7 ./scripts/run-zk.sh
+CLUSTER_SIZE=7 ./scripts/run-nodes.sh
+```
+
+Stop the same cluster size:
+
+```bash
+CLUSTER_SIZE=3 ./scripts/stop-nodes.sh
+CLUSTER_SIZE=5 ./scripts/stop-nodes.sh
+CLUSTER_SIZE=7 ./scripts/stop-nodes.sh
+```
 
 ## Baseline Run
 

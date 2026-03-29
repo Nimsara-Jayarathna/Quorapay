@@ -43,6 +43,10 @@ type Replicator interface {
 	ReplicateWithQuorum(ctx context.Context, entry replication.LogEntry, followerURLs []string) (replication.QuorumReplicationResult, error)
 }
 
+type MemberDiscovery interface {
+	GetMembers() ([]coordination.Member, error)
+}
+
 type LedgerStore interface {
 	ListPayments(context.Context) ([]storage.Payment, error)
 	ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
@@ -58,6 +62,7 @@ type handler struct {
 	coordinator      Coordinator
 	ledger           LedgerStore
 	replicator       Replicator
+	discovery        MemberDiscovery
 	leaderHTTPClient *http.Client
 	lamportClock     *timesync.LamportClock
 	skewTracker      *timesync.SkewTracker
@@ -77,6 +82,10 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	if c, ok := status.(Coordinator); ok {
 		coord = c
 	}
+	var discovery MemberDiscovery
+	if d, ok := status.(MemberDiscovery); ok {
+		discovery = d
+	}
 
 	leaderClient := cfg.LeaderHTTPClient
 	if leaderClient == nil {
@@ -89,6 +98,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		coordinator:      coord,
 		ledger:           ledger,
 		replicator:       repl,
+		discovery:        discovery,
 		leaderHTTPClient: leaderClient,
 		lamportClock:     timesync.NewLamportClock(),
 		skewTracker:      timesync.NewSkewTracker(),
@@ -106,8 +116,29 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
+	mux.HandleFunc("/cluster/nodes", h.clusterNodesHandler)
 	mux.HandleFunc("/admin/shutdown", h.shutdownHandler)
 	return withCORS(cfg.CORSAllowed, mux)
+}
+
+func (h *handler) clusterNodesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	if h.discovery == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "member discovery is not available"})
+		return
+	}
+	members, err := h.discovery.GetMembers()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count": len(members),
+		"items": members,
+	})
 }
 
 func durationOrDefaultMS(valueMS int64, fallback time.Duration) time.Duration {

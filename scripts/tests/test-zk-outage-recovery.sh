@@ -4,6 +4,9 @@ set -eu
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
 POLL_SECONDS="${POLL_SECONDS:-1}"
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+
+. "$ROOT_DIR/scripts/lib/cluster_env.sh"
 
 extract_string() {
 	echo "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
@@ -22,7 +25,8 @@ find_single_leader() {
 	leader_id=""
 	leader_term=""
 
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		json=$(status_for_port "$port")
 		if [ -z "$json" ]; then
 			continue
@@ -58,7 +62,8 @@ wait_for_single_leader() {
 }
 
 all_nodes_unknown_with_zk_error() {
-	for port in 8001 8002 8003; do
+	for spec in $(echo "$NODES" | tr ',' ' '); do
+		port=$(echo "$spec" | cut -d: -f2)
 		json=$(status_for_port "$port")
 		if [ -z "$json" ]; then
 			return 1
