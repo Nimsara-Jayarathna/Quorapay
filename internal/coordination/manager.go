@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +45,11 @@ type Manager struct {
 	lastKnownLease   leaderLease
 	rejoinedSince    time.Time
 	recoveryCaughtUp bool
+}
+
+type Member struct {
+	NodeID string `json:"node_id"`
+	URL    string `json:"url"`
 }
 
 func NewManager(cfg Config) *Manager {
@@ -152,6 +159,38 @@ func (m *Manager) GetFollowerURLs() ([]string, error) {
 	}
 
 	return followers, nil
+}
+
+func (m *Manager) GetMembers() ([]Member, error) {
+	if m.conn == nil || !m.started {
+		return []Member{}, fmt.Errorf("zookeeper connection is not initialized")
+	}
+
+	children, _, err := m.conn.Children(m.membersPath())
+	if err != nil {
+		return []Member{}, fmt.Errorf("read cluster members: %w", err)
+	}
+	sort.Strings(children)
+
+	members := make([]Member, 0, len(children))
+	for _, child := range children {
+		data, _, getErr := m.conn.Get(m.membersPath() + "/" + child)
+		if getErr != nil {
+			if errors.Is(getErr, zk.ErrNoNode) {
+				continue
+			}
+			return []Member{}, fmt.Errorf("read member %s data: %w", child, getErr)
+		}
+		url := strings.TrimSpace(string(data))
+		if url == "" {
+			continue
+		}
+		members = append(members, Member{
+			NodeID: child,
+			URL:    url,
+		})
+	}
+	return members, nil
 }
 
 func (m *Manager) Close() error {
