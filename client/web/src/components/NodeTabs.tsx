@@ -3,10 +3,18 @@ type NodeTabsProps = {
   selectedNodeIndex: number;
   onSelectNode: (index: number) => void;
   nodeMetaByUrl?: Record<string, { nodeId?: string; role?: string }>;
-  onOpenNodeManagement: (action: "start" | "stop" | "restart") => void;
+  showControls?: boolean;
+  onOpenNodeManagement?: (action: "start" | "stop" | "restart") => void;
 };
 
-function NodeTabs({ nodeUrls, selectedNodeIndex, onSelectNode, nodeMetaByUrl, onOpenNodeManagement }: NodeTabsProps) {
+function NodeTabs({
+  nodeUrls,
+  selectedNodeIndex,
+  onSelectNode,
+  nodeMetaByUrl,
+  showControls = false,
+  onOpenNodeManagement,
+}: NodeTabsProps) {
   const selectedUrl = nodeUrls[selectedNodeIndex] ?? "";
   const selectedMeta = nodeMetaByUrl?.[selectedUrl];
 
@@ -14,30 +22,34 @@ function NodeTabs({ nodeUrls, selectedNodeIndex, onSelectNode, nodeMetaByUrl, on
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-slate-900">Node Management</h2>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onOpenNodeManagement("start")}
-            className="rounded-md border border-emerald-700 bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-600"
-          >
-            Start Node
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenNodeManagement("stop")}
-            className="rounded-md border border-red-700 bg-red-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-600"
-          >
-            Terminate Node
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenNodeManagement("restart")}
-            className="rounded-md border border-amber-700 bg-amber-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-600"
-          >
-            Restart Node
-          </button>
+        {showControls && onOpenNodeManagement ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenNodeManagement("start")}
+              className="rounded-md border border-emerald-700 bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-600"
+            >
+              Start Node
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenNodeManagement("stop")}
+              className="rounded-md border border-red-700 bg-red-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-600"
+            >
+              Terminate Node
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenNodeManagement("restart")}
+              className="rounded-md border border-amber-700 bg-amber-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-600"
+            >
+              Restart Node
+            </button>
+            <span className="ml-2 text-xs text-slate-500">{nodeUrls.length} nodes</span>
+          </div>
+        ) : (
           <span className="ml-2 text-xs text-slate-500">{nodeUrls.length} nodes</span>
-        </div>
+        )}
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
         {nodeUrls.map((url, index) => {

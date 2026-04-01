@@ -170,6 +170,16 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req replication.PaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	if err := req.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
 	status := h.coordinator.CurrentStatus()
 	receivedBy := strings.TrimSpace(r.Header.Get(receivedByHeader))
 	if receivedBy == "" {
@@ -178,6 +188,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	h.recordEvent(PaymentEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		NodeID:    h.cfg.NodeID,
+		PaymentID: req.PaymentID,
 		Stage:     "RECEIVED",
 		Message:   "payment request received",
 	})
@@ -186,23 +197,14 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 			h.recordEvent(PaymentEvent{
 				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 				NodeID:    h.cfg.NodeID,
+				PaymentID: req.PaymentID,
 				Stage:     "FORWARDED_TO_LEADER",
 				Message:   "request forwarded to leader",
 			})
-			h.forwardPayToLeader(w, r, status.LeaderURL, receivedBy)
+			h.forwardPayToLeader(w, r.Context(), status.LeaderURL, receivedBy, req)
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "no leader available"})
-		return
-	}
-
-	var req replication.PaymentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
-		return
-	}
-	if err := req.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
 	h.recordEvent(PaymentEvent{
@@ -378,15 +380,15 @@ func (h *handler) recordEvent(event PaymentEvent) {
 	}
 }
 
-func (h *handler) forwardPayToLeader(w http.ResponseWriter, r *http.Request, leaderURL string, receivedBy string) {
+func (h *handler) forwardPayToLeader(w http.ResponseWriter, ctx context.Context, leaderURL string, receivedBy string, reqBody replication.PaymentRequest) {
 	endpoint := strings.TrimRight(leaderURL, "/") + "/pay"
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to reach leader"})
 		return
@@ -410,4 +412,18 @@ func (h *handler) forwardPayToLeader(w http.ResponseWriter, r *http.Request, lea
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
+
+	stage := "LEADER_RESPONSE_SUCCESS"
+	msg := "leader completed forwarded payment request"
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		stage = "LEADER_RESPONSE_FAILED"
+		msg = "leader returned a failed payment response"
+	}
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		PaymentID: reqBody.PaymentID,
+		Stage:     stage,
+		Message:   msg,
+	})
 }

@@ -8,6 +8,7 @@ import NodeActionModal from "./components/NodeActionModal";
 import NoNodesConnectedModal from "./components/NoNodesConnectedModal";
 import PaymentActionModal from "./components/PaymentActionModal";
 import PaymentForm from "./components/PaymentForm";
+import ClientStripeCheckout from "./components/ClientStripeCheckout";
 import {
   AdminNodeActionResponse,
   fetchJson,
@@ -53,8 +54,43 @@ function generatePaymentId(): string {
   return `pay-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function resolveRoute(pathname: string): "/admin" | "/client" | "not-found" {
+  if (pathname === "/admin" || pathname === "/") {
+    return "/admin";
+  }
+  if (pathname === "/client") {
+    return "/client";
+  }
+  return "not-found";
+}
+
+function stageMessageFromEvent(stage: string): string {
+  switch (stage) {
+    case "RECEIVED":
+      return "Stage 1/6: Payment request received by selected node.";
+    case "FORWARDED_TO_LEADER":
+      return "Stage 2/6: Request forwarded to leader node.";
+    case "LEADER_PROCESSING":
+      return "Stage 3/6: Leader validating and processing Stripe payment.";
+    case "LEADER_RESPONSE_SUCCESS":
+      return "Stage 4/6: Leader returned successful processing response.";
+    case "LEADER_RESPONSE_FAILED":
+      return "Stage 4/6: Leader returned failed processing response.";
+    case "COMMITTED":
+      return "Stage 6/6: Payment committed and replicated.";
+    case "PROVIDER_FAILED":
+      return "Stage 5/6: Payment provider rejected transaction.";
+    case "QUORUM_NOT_REACHED":
+      return "Stage 5/6: Replication quorum not reached.";
+    case "REPLICATION_FAILED":
+      return "Stage 5/6: Replication failed during cluster write.";
+    default:
+      return "Processing payment across cluster nodes...";
+  }
+}
+
 function App() {
-  const [route, setRoute] = useState<string>(() => (window.location.pathname.startsWith("/client") ? "/client" : "/admin"));
+  const [route, setRoute] = useState<"/admin" | "/client" | "not-found">(() => resolveRoute(window.location.pathname));
 
   const [nodeUrls, setNodeUrls] = useState<string[]>(initialNodeUrls);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
@@ -257,20 +293,44 @@ function App() {
       simulate_outcome: simulateOutcome,
     };
 
+    const requestedPaymentID = paymentId.trim();
     setPaymentLoading(true);
     setPaymentError(null);
-    showPaymentModal("loading", "Processing Payment", "Stage 1/4: Received by selected node...");
+    showPaymentModal("loading", "Processing Payment", "Stage 1/6: Payment request received by selected node.");
+
+    let pollActive = true;
+    let lastStage = "";
+    const pollEvents = async () => {
+      try {
+        const events = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events?payment_id=${encodeURIComponent(requestedPaymentID)}`);
+        const latest = events.items?.[events.items.length - 1];
+        if (latest && latest.stage !== lastStage) {
+          lastStage = latest.stage;
+          showPaymentModal("loading", "Processing Payment", stageMessageFromEvent(latest.stage));
+        }
+      } catch {
+        // ignore polling failures while payment request is in progress
+      }
+    };
+    void pollEvents();
+    const pollTimer = window.setInterval(() => {
+      if (!pollActive) {
+        return;
+      }
+      void pollEvents();
+    }, 700);
 
     try {
-      showPaymentModal("loading", "Processing Payment", "Stage 2/4: Leader election and routing check...");
       const result = await fetchJson<PaymentResponse>(`${selectedNodeUrl}/pay`, {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      pollActive = false;
+      window.clearInterval(pollTimer);
       setPaymentResult(result);
       const trace = result.trace;
       const summary = [
-        `Stage 4/4: Completed successfully`,
+        `Stage 6/6: Completed successfully`,
         `Payment ID: ${result.payment_id}`,
         `Leader: ${result.leader_id ?? "-"}`,
         `Routed To Leader: ${trace?.routed_to_leader ? "Yes" : "No"}`,
@@ -281,14 +341,18 @@ function App() {
       void refreshLedger();
       void refreshEvents();
     } catch (error) {
+      pollActive = false;
+      window.clearInterval(pollTimer);
       setPaymentResult(null);
       const message = getErrorMessage(error);
       setPaymentError(message);
-      showPaymentModal("error", "Payment Failed", `Stage 4/4: Failed\n${message}`);
+      showPaymentModal("error", "Payment Failed", `Stage 6/6: Failed\n${message}`);
       void refreshStatus();
       void refreshLedger();
       void refreshEvents();
     } finally {
+      pollActive = false;
+      window.clearInterval(pollTimer);
       setPaymentLoading(false);
     }
   }
@@ -441,7 +505,7 @@ function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      setRoute(window.location.pathname.startsWith("/client") ? "/client" : "/admin");
+      setRoute(resolveRoute(window.location.pathname));
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -465,9 +529,36 @@ function App() {
   const navigate = (target: "/admin" | "/client") => {
     if (window.location.pathname !== target) {
       window.history.pushState({}, "", target);
-      setRoute(target);
+      setRoute(resolveRoute(target));
     }
   };
+
+  if (route === "not-found") {
+    return (
+      <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
+        <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">Route Not Found</h1>
+          <p className="mt-2 text-sm text-slate-600">Only `/admin` and `/client` are valid routes in this prototype.</p>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/admin")}
+              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              Go to Admin
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/client")}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Go to Client
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative">
@@ -531,43 +622,27 @@ function App() {
             selectedNodeIndex={selectedNodeIndex}
             onSelectNode={setSelectedNodeIndex}
             nodeMetaByUrl={nodeMetaByUrl}
-            onOpenNodeManagement={openNodeManagement}
+            showControls={route === "/admin"}
+            onOpenNodeManagement={route === "/admin" ? openNodeManagement : undefined}
           />
 
           {route === "/client" ? (
-            <div className="grid gap-6 xl:grid-cols-12">
-              <div className="xl:col-span-7">
-                <PaymentForm
-                  paymentId={paymentId}
-                  amount={amount}
-                  currency={currency}
-                  simulateOutcome={simulateOutcome}
-                  paymentLoading={paymentLoading}
-                  onPaymentIdChange={setPaymentId}
-                  onAmountChange={setAmount}
-                  onCurrencyChange={setCurrency}
-                  onSimulateOutcomeChange={setSimulateOutcome}
-                  onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
-                  onSubmit={handleSubmitPayment}
-                />
-                {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
-                {paymentResult ? (
-                  <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                    Payment {paymentResult.payment_id} processed by leader {paymentResult.leader_id ?? "-"}, quorum {paymentResult.trace?.ack_count ?? "-"}/{paymentResult.trace?.required_quorum ?? "-"}.
-                  </div>
-                ) : null}
-              </div>
-              <div className="xl:col-span-5">
-                <NodeStatusPanel
-                  status={status}
-                  statusLoading={statusLoading}
-                  nodeActionLoading={shutdownLoading}
-                  shutdownMessage={shutdownMessage}
-                  selectedNodeId={selectedNodeId}
-                  onRefreshStatus={() => void refreshStatus()}
-                  onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
-                />
-              </div>
+            <div className="mx-auto max-w-3xl">
+              <ClientStripeCheckout
+                amount={amount}
+                currency={currency}
+                paymentLoading={paymentLoading}
+                onAmountChange={setAmount}
+                onCurrencyChange={setCurrency}
+                onSimulateOutcomeChange={setSimulateOutcome}
+                onSubmit={handleSubmitPayment}
+              />
+              {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
+              {paymentResult ? (
+                <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                  Payment {paymentResult.payment_id} processed by leader {paymentResult.leader_id ?? "-"}, quorum {paymentResult.trace?.ack_count ?? "-"}/{paymentResult.trace?.required_quorum ?? "-"}.
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="grid items-stretch gap-6 xl:grid-cols-12">
@@ -601,58 +676,62 @@ function App() {
             </div>
           )}
 
-          <LedgerTable
-            statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
-            ledgerLoading={ledgerLoading}
-            ledgerError={ledgerError}
-            items={filteredLedgerItems}
-            onRefreshLedger={() => void refreshLedger()}
-          />
+          {route === "/admin" ? (
+            <>
+              <LedgerTable
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                ledgerLoading={ledgerLoading}
+                ledgerError={ledgerError}
+                items={filteredLedgerItems}
+                onRefreshLedger={() => void refreshLedger()}
+              />
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-lg font-medium text-slate-900">Payment Process Logs (Selected Node)</h2>
-              <button
-                type="button"
-                onClick={() => void refreshEvents()}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-              >
-                Refresh Logs
-              </button>
-            </div>
-            {eventsError ? <div className="mb-2 text-sm text-red-700">Log error: {eventsError}</div> : null}
-            <div className="max-h-72 overflow-auto rounded-md border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Timestamp</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Stage</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Payment</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Message</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {eventItems.length === 0 ? (
-                    <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={4}>
-                        No process logs.
-                      </td>
-                    </tr>
-                  ) : (
-                    eventItems.slice().reverse().map((item, idx) => (
-                      <tr key={`${item.timestamp}-${item.stage}-${idx}`}>
-                        <td className="px-3 py-2 text-slate-700">{new Date(item.timestamp).toLocaleString()}</td>
-                        <td className="px-3 py-2 text-slate-700">{item.stage}</td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id ?? "-"}</td>
-                        <td className="px-3 py-2 text-slate-700">{item.message}</td>
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-medium text-slate-900">Payment Process Logs (Selected Node)</h2>
+                  <button
+                    type="button"
+                    onClick={() => void refreshEvents()}
+                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+                  >
+                    Refresh Logs
+                  </button>
+                </div>
+                {eventsError ? <div className="mb-2 text-sm text-red-700">Log error: {eventsError}</div> : null}
+                <div className="max-h-72 overflow-auto rounded-md border border-slate-200">
+                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Timestamp</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Stage</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Payment</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Message</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {eventItems.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-4 text-slate-500" colSpan={4}>
+                            No process logs.
+                          </td>
+                        </tr>
+                      ) : (
+                        eventItems.slice().reverse().map((item, idx) => (
+                          <tr key={`${item.timestamp}-${item.stage}-${idx}`}>
+                            <td className="px-3 py-2 text-slate-700">{new Date(item.timestamp).toLocaleString()}</td>
+                            <td className="px-3 py-2 text-slate-700">{item.stage}</td>
+                            <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id ?? "-"}</td>
+                            <td className="px-3 py-2 text-slate-700">{item.message}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          ) : null}
         </div>
       </div>
     </div>
