@@ -20,16 +20,21 @@ function ClientStripeCheckout({
   onSubmit,
 }: ClientStripeCheckoutProps) {
   return (
-    <section className="h-full rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold text-slate-900">Stripe Checkout (Client View)</h2>
-        <p className="mt-1 text-sm text-slate-600">Enter payment amount and currency. Stripe checkout will collect card details securely.</p>
+    <section className="h-full rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-5 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Stripe Checkout</h2>
+          <p className="mt-1 text-sm text-slate-600">Secure Stripe-hosted card collection with distributed finalization.</p>
+        </div>
+        <span className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-indigo-700">
+          Client
+        </span>
       </div>
 
       <form className="grid gap-4" onSubmit={onSubmit}>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="grid gap-2">
-            <label htmlFor="checkout-amount" className="text-sm font-medium text-slate-700">Amount</label>
+            <label htmlFor="checkout-amount" className="text-sm font-semibold text-slate-700">Amount</label>
             <input
               id="checkout-amount"
               type="number"
@@ -37,16 +42,16 @@ function ClientStripeCheckout({
               step="0.01"
               value={amount}
               onChange={(event) => onAmountChange(event.target.value)}
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
             />
           </div>
           <div className="grid gap-2">
-            <label htmlFor="checkout-currency" className="text-sm font-medium text-slate-700">Currency</label>
+            <label htmlFor="checkout-currency" className="text-sm font-semibold text-slate-700">Currency</label>
             <select
               id="checkout-currency"
               value={currency}
               onChange={(event) => onCurrencyChange(event.target.value)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
             >
               {currencyOptions.map((option) => (
                 <option key={option} value={option}>
@@ -60,7 +65,7 @@ function ClientStripeCheckout({
         <button
           type="submit"
           disabled={paymentLoading}
-          className="mt-1 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {paymentLoading ? "Processing..." : "Pay"}
         </button>

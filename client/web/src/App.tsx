@@ -46,6 +46,11 @@ const blockingModalTimeoutMS =
     ? configuredBlockingModalTimeoutMS
     : 3000;
 const paymentModalManualCloseEnabled = String(import.meta.env.VITE_PAYMENT_MODAL_MANUAL_CLOSE_ENABLED ?? "true").toLowerCase() !== "false";
+const configuredInlineMessageTimeoutMS = Number(import.meta.env.VITE_INLINE_MESSAGE_TIMEOUT_MS ?? "4500");
+const inlineMessageTimeoutMS =
+  Number.isInteger(configuredInlineMessageTimeoutMS) && configuredInlineMessageTimeoutMS >= 0
+    ? configuredInlineMessageTimeoutMS
+    : 4500;
 const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
 const gatewayApiBaseUrl = (import.meta.env.VITE_GATEWAY_API_BASE_URL as string | undefined)?.trim() || "http://localhost:18100";
 const clientCurrencyOptions = ["USD", "EUR", "GBP", "LKR"];
@@ -742,6 +747,46 @@ function App() {
     [],
   );
 
+  useEffect(() => {
+    if (!paymentError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setPaymentError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [paymentError]);
+
+  useEffect(() => {
+    if (!statusError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setStatusError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [statusError]);
+
+  useEffect(() => {
+    if (!ledgerError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setLedgerError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [ledgerError]);
+
+  useEffect(() => {
+    if (!eventsError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setEventsError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [eventsError]);
+
+  useEffect(() => {
+    if (!shutdownMessage) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setShutdownMessage(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [shutdownMessage]);
+
   const clientPaymentLogs = useMemo<ClientPaymentLogItem[]>(
     () =>
       ledgerItems
@@ -843,7 +888,10 @@ function App() {
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Quorapay Prototype</h1>
+            <div className="flex items-center gap-3">
+              <img src="/logo.svg" alt="Quorapay" className="h-9 w-9 rounded-md object-contain" />
+              <h1 className="text-2xl font-semibold text-slate-900">Quorapay Prototype</h1>
+            </div>
             <p className="mt-1 text-sm text-slate-600">Distributed payment simulation with selected-node perspective and process logs.</p>
           </div>
           <div className="inline-flex rounded-md border border-slate-300 bg-white p-1">
@@ -877,7 +925,7 @@ function App() {
           />
 
           {route === "/client" ? (
-            <div className="mx-auto max-w-3xl">
+            <div className="mx-auto max-w-5xl">
               <ClientStripeCheckout
                 amount={amount}
                 currency={currency}
@@ -887,31 +935,35 @@ function App() {
                 onCurrencyChange={setCurrency}
                 onSubmit={handleClientCheckoutSubmit}
               />
-              {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
-              <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="mb-3 text-sm font-semibold text-slate-900">Payment Log</h3>
-                <div className="overflow-x-auto rounded-md border border-slate-200">
+              <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-slate-900">Payment Log</h3>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {clientPaymentLogs.length} records
+                  </span>
+                </div>
+                <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200">
                   <table className="min-w-full table-fixed divide-y divide-slate-200 text-sm">
-                    <thead className="bg-slate-50">
+                    <thead className="sticky top-0 z-10 bg-slate-50">
                       <tr>
-                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Amount</th>
-                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                        <th className="w-2/5 px-3 py-2 text-left font-medium text-slate-600">Payment ID</th>
-                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Time</th>
+                        <th className="w-[18%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Amount</th>
+                        <th className="w-[14%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                        <th className="w-[38%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Payment ID</th>
+                        <th className="w-[30%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Time</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
                       {clientPaymentLogs.length === 0 ? (
                         <tr>
-                          <td className="px-3 py-3 text-slate-500" colSpan={4}>
+                          <td className="px-3 py-6 text-center text-slate-500" colSpan={4}>
                             No payments yet.
                           </td>
                         </tr>
                       ) : (
                         clientPaymentLogs.map((item) => (
-                          <tr key={`${item.id}-${item.at}`}>
-                            <td className="px-3 py-2 font-medium text-slate-800">{item.amount}</td>
-                            <td className="px-3 py-2">
+                          <tr key={`${item.id}-${item.at}`} className="odd:bg-white even:bg-slate-50/45">
+                            <td className="px-3 py-2.5 font-medium text-slate-800">{item.amount}</td>
+                            <td className="px-3 py-2.5">
                               <span
                                 className={`inline-flex min-w-[78px] justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
                                   item.status === "SUCCESS"
@@ -924,10 +976,10 @@ function App() {
                                 {item.status}
                               </span>
                             </td>
-                            <td className="truncate px-3 py-2 font-mono text-xs text-slate-700" title={item.id}>
+                            <td className="truncate px-3 py-2.5 font-mono text-xs text-slate-700" title={item.id}>
                               {item.id}
                             </td>
-                            <td className="px-3 py-2 text-xs text-slate-700">{new Date(item.at).toLocaleString()}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-700">{new Date(item.at).toLocaleString()}</td>
                           </tr>
                         ))
                       )}
