@@ -8,6 +8,14 @@ Quorapay is a distributed payment-processing prototype for e-commerce style flow
 
 It uses leader-based coordination (ZooKeeper), quorum replication, a separate admin service, and a frontend with Admin and Client routes.
 
+## Team
+| Member | Name | IT Number | Email | Scope |
+|---|---|---|---|---|
+| Member 1 | E.J.M.S De Silva | IT24101512 | it24101512@my.sliit.lk | Fault Tolerance (Member 1) |
+| Member 2 | M.K.M Pehesara | IT24100487 | it24100487@my.sliit.lk | Data Replication and Consistency (Member 2) |
+| Member 3 | R.M.A Priyashan | IT24101492 | it24101492@my.sliit.lk | Time Synchronization (Member 3) |
+| Member 4 | W.A.N.M Jayarathna | IT24603464 | it24603464@my.sliit.lk | Consensus and Agreement Algorithms (Member 4) |
+
 ## What The System Includes
 - `cmd/quorapay-node`:
   - payment node API (`/pay`, `/ledger`, `/status`, Stripe handlers, internal replication endpoints)
@@ -20,7 +28,7 @@ It uses leader-based coordination (ZooKeeper), quorum replication, a separate ad
   - `/admin` route (cluster operations, ledger, process logs)
   - `/client` route (Stripe checkout UI, node selector, client payment log)
 
-## Architecture (Current)
+## Architecture
 1. Client selects an entry node in UI.
 2. Client calls gateway for checkout/finalize/cancel.
 3. Gateway discovers leader from node `/status` and forwards to leader.
@@ -252,4 +260,3 @@ For script-based automated tests, see:
 - Event logs (`/events`) are node-local observability.
 - Ledger (`/ledger`) is replicated system-of-record.
 - For consistency checks, always validate ledger across nodes, not only event stream.
-
