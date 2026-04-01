@@ -8,11 +8,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"quorapay/internal/coordination"
+	"quorapay/internal/payment"
 	"quorapay/internal/replication"
 	"quorapay/internal/storage"
 	"quorapay/internal/timesync"
@@ -30,6 +32,7 @@ type Config struct {
 	MaxMessageAgeMS  int64
 	MaxFutureDriftMS int64
 	LeaderHTTPClient *http.Client
+	StripeSecretKey  string
 }
 
 type Coordinator interface {
@@ -73,6 +76,7 @@ type handler struct {
 	maxFutureDrift   time.Duration
 	eventsMu         sync.RWMutex
 	events           []PaymentEvent
+	stripeClient     *payment.StripeClient
 }
 
 type PaymentEvent struct {
@@ -117,6 +121,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		skewReject:       durationOrDefaultMS(cfg.SkewRejectMS, 500*time.Millisecond),
 		maxMessageAge:    durationOrDefaultMS(cfg.MaxMessageAgeMS, 2*time.Second),
 		maxFutureDrift:   durationOrDefaultMS(cfg.MaxFutureDriftMS, 500*time.Millisecond),
+		stripeClient:     payment.NewStripeClient(cfg.StripeSecretKey),
 	}
 
 	mux := http.NewServeMux()
@@ -124,12 +129,106 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/status", h.statusHandler)
 	mux.HandleFunc("/ledger", h.ledgerHandler)
 	mux.HandleFunc("/pay", h.payHandler)
+	mux.HandleFunc("/stripe/create-checkout-session", h.stripeCreateCheckoutSessionHandler)
+	mux.HandleFunc("/stripe/session-status", h.stripeSessionStatusHandler)
 	mux.HandleFunc("/events", h.eventsHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
 	mux.HandleFunc("/cluster/nodes", h.clusterNodesHandler)
 	return withCORS(cfg.CORSAllowed, mux)
+}
+
+type stripeCreateCheckoutSessionRequest struct {
+	PaymentID  string  `json:"payment_id"`
+	Amount     float64 `json:"amount"`
+	Currency   string  `json:"currency"`
+	SuccessURL string  `json:"success_url"`
+	CancelURL  string  `json:"cancel_url"`
+}
+
+func (h *handler) stripeCreateCheckoutSessionHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	if h.stripeClient == nil || !h.stripeClient.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "stripe is not configured on this node"})
+		return
+	}
+
+	var req stripeCreateCheckoutSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.PaymentID) == "" || req.Amount <= 0 || strings.TrimSpace(req.Currency) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "payment_id, amount, and currency are required"})
+		return
+	}
+	if _, err := url.ParseRequestURI(strings.TrimSpace(req.SuccessURL)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid success_url"})
+		return
+	}
+	if _, err := url.ParseRequestURI(strings.TrimSpace(req.CancelURL)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid cancel_url"})
+		return
+	}
+
+	session, err := h.stripeClient.CreateCheckoutSession(r.Context(), payment.CheckoutSessionCreateRequest{
+		PaymentID:  strings.TrimSpace(req.PaymentID),
+		Amount:     req.Amount,
+		Currency:   strings.TrimSpace(req.Currency),
+		SuccessURL: strings.TrimSpace(req.SuccessURL),
+		CancelURL:  strings.TrimSpace(req.CancelURL),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+		return
+	}
+
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		PaymentID: req.PaymentID,
+		Stage:     "STRIPE_SESSION_CREATED",
+		Message:   "stripe checkout session created",
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": session.ID,
+		"url":        session.URL,
+	})
+}
+
+func (h *handler) stripeSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	if h.stripeClient == nil || !h.stripeClient.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "stripe is not configured on this node"})
+		return
+	}
+
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "session_id is required"})
+		return
+	}
+	session, err := h.stripeClient.GetCheckoutSession(r.Context(), sessionID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":     session.ID,
+		"payment_status": session.PaymentStatus,
+		"amount_total":   session.AmountTotal,
+		"currency":       strings.ToUpper(session.Currency),
+		"metadata":       session.Metadata,
+	})
 }
 
 func (h *handler) clusterNodesHandler(w http.ResponseWriter, r *http.Request) {

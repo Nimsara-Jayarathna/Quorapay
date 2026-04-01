@@ -46,6 +46,7 @@ const blockingModalTimeoutMS =
     ? configuredBlockingModalTimeoutMS
     : 3000;
 const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
+const clientCurrencyOptions = ["USD", "EUR", "GBP", "LKR"];
 
 function generatePaymentId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -63,6 +64,14 @@ function resolveRoute(pathname: string): "/admin" | "/client" | "not-found" {
   }
   return "not-found";
 }
+
+type ClientPaymentLogItem = {
+  id: string;
+  amount: string;
+  status: "SUCCESS" | "FAILED";
+  at: string;
+  logIndex: number;
+};
 
 function stageMessageFromEvent(stage: string): string {
   switch (stage) {
@@ -114,6 +123,7 @@ function App() {
   const [paymentModalTitle, setPaymentModalTitle] = useState("Processing Payment");
   const [paymentModalMessage, setPaymentModalMessage] = useState("Submitting payment to cluster...");
   const paymentModalTimeoutRef = useRef<number | null>(null);
+  const [stripeSessionHandled, setStripeSessionHandled] = useState<string>("");
 
   const [ledgerItems, setLedgerItems] = useState<LedgerResponse["items"]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
@@ -136,10 +146,15 @@ function App() {
   const nodeActionModalTimeoutRef = useRef<number | null>(null);
 
   const filteredLedgerItems = useMemo(() => {
-    if (statusFilter === "ALL") {
-      return ledgerItems;
-    }
-    return ledgerItems.filter((item) => item.status === statusFilter);
+    const filtered = statusFilter === "ALL" ? ledgerItems : ledgerItems.filter((item) => item.status === statusFilter);
+    return filtered.slice().sort((a, b) => {
+      if (a.log_index !== b.log_index) {
+        return b.log_index - a.log_index;
+      }
+      const at = new Date(a.created_at).getTime();
+      const bt = new Date(b.created_at).getTime();
+      return bt - at;
+    });
   }, [ledgerItems, statusFilter]);
 
   const refreshTopology = useCallback(async () => {
@@ -239,9 +254,25 @@ function App() {
     }
   }, [selectedNodeUrl]);
 
-  async function handleSubmitPayment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
+    if (paymentModalTimeoutRef.current !== null) {
+      window.clearTimeout(paymentModalTimeoutRef.current);
+      paymentModalTimeoutRef.current = null;
+    }
+    setPaymentModalState(state);
+    setPaymentModalTitle(title);
+    setPaymentModalMessage(message);
+    setPaymentModalOpen(true);
+    if (state !== "loading") {
+      paymentModalTimeoutRef.current = window.setTimeout(() => {
+        setPaymentModalOpen(false);
+        paymentModalTimeoutRef.current = null;
+      }, blockingModalTimeoutMS);
+    }
+  };
 
+  async function submitDistributedPayment(payload: PaymentRequest, selectedURL: string) {
+    const requestedPaymentID = payload.payment_id.trim();
     const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
       if (paymentModalTimeoutRef.current !== null) {
         window.clearTimeout(paymentModalTimeoutRef.current);
@@ -258,6 +289,95 @@ function App() {
         }, blockingModalTimeoutMS);
       }
     };
+
+    setPaymentLoading(true);
+    setPaymentError(null);
+    showPaymentModal("loading", "Processing Payment", "Stage 1/6: Payment request received by selected node.");
+
+    let pollActive = true;
+    let lastStage = "";
+    let safetyTimeout: number | null = null;
+    const pollEvents = async () => {
+      try {
+        const events = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events?payment_id=${encodeURIComponent(requestedPaymentID)}`);
+        const latest = events.items?.[events.items.length - 1];
+        if (latest && latest.stage !== lastStage) {
+          lastStage = latest.stage;
+          showPaymentModal("loading", "Processing Payment", stageMessageFromEvent(latest.stage));
+        }
+      } catch {
+        // ignore polling failures while payment request is in progress
+      }
+    };
+    void pollEvents();
+    const pollTimer = window.setInterval(() => {
+      if (!pollActive) {
+        return;
+      }
+      void pollEvents();
+    }, 700);
+    safetyTimeout = window.setTimeout(() => {
+      if (!pollActive) {
+        return;
+      }
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      showPaymentModal("error", "Payment Timeout", "Payment processing took too long. Please refresh and check ledger/events.");
+      setPaymentLoading(false);
+    }, 30000);
+
+    try {
+      const result = await fetchJson<PaymentResponse>(`${selectedURL}/pay`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      setPaymentResult(result);
+      const trace = result.trace;
+      const summary = [
+        `Stage 6/6: Completed successfully`,
+        `Payment ID: ${result.payment_id}`,
+        `Leader: ${result.leader_id ?? "-"}`,
+        `Routed To Leader: ${trace?.routed_to_leader ? "Yes" : "No"}`,
+        `Quorum: ${trace?.ack_count ?? "-"}/${trace?.required_quorum ?? "-"}`,
+      ].join("\n");
+      showPaymentModal("success", "Payment Accepted", summary);
+      window.setTimeout(() => setPaymentModalOpen(false), 1800);
+      void refreshStatus();
+      void refreshLedger();
+      void refreshEvents();
+    } catch (error) {
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      setPaymentResult(null);
+      const message = getErrorMessage(error);
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Failed", `Stage 6/6: Failed\n${message}`);
+      window.setTimeout(() => setPaymentModalOpen(false), 1800);
+      void refreshStatus();
+      void refreshLedger();
+      void refreshEvents();
+    } finally {
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+      }
+      setPaymentLoading(false);
+    }
+  }
+
+  async function handleSubmitPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
     if (!selectedNodeUrl) {
       const message = "No node URL configured. Check VITE_SEED_NODE_URL and scan settings.";
@@ -292,67 +412,44 @@ function App() {
       currency: currency.trim().toUpperCase(),
       simulate_outcome: simulateOutcome,
     };
+    await submitDistributedPayment(payload, selectedNodeUrl);
+  }
 
-    const requestedPaymentID = paymentId.trim();
+  async function handleClientCheckoutSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedNodeUrl) {
+      setPaymentError("No node URL configured.");
+      return;
+    }
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0 || !currency.trim()) {
+      setPaymentError("Valid amount and currency are required.");
+      return;
+    }
+    const pid = paymentId.trim() || generatePaymentId();
+    setPaymentId(pid);
+
+    const successURL = `${window.location.origin}/client?stripe=success&session_id={CHECKOUT_SESSION_ID}&payment_id=${encodeURIComponent(pid)}&amount=${encodeURIComponent(
+      numericAmount.toFixed(2),
+    )}&currency=${encodeURIComponent(currency.trim().toUpperCase())}`;
+    const cancelURL = `${window.location.origin}/client?stripe=cancel&payment_id=${encodeURIComponent(pid)}`;
+
     setPaymentLoading(true);
     setPaymentError(null);
-    showPaymentModal("loading", "Processing Payment", "Stage 1/6: Payment request received by selected node.");
-
-    let pollActive = true;
-    let lastStage = "";
-    const pollEvents = async () => {
-      try {
-        const events = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events?payment_id=${encodeURIComponent(requestedPaymentID)}`);
-        const latest = events.items?.[events.items.length - 1];
-        if (latest && latest.stage !== lastStage) {
-          lastStage = latest.stage;
-          showPaymentModal("loading", "Processing Payment", stageMessageFromEvent(latest.stage));
-        }
-      } catch {
-        // ignore polling failures while payment request is in progress
-      }
-    };
-    void pollEvents();
-    const pollTimer = window.setInterval(() => {
-      if (!pollActive) {
-        return;
-      }
-      void pollEvents();
-    }, 700);
-
     try {
-      const result = await fetchJson<PaymentResponse>(`${selectedNodeUrl}/pay`, {
+      const out = await fetchJson<{ session_id: string; url: string }>(`${selectedNodeUrl}/stripe/create-checkout-session`, {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          payment_id: pid,
+          amount: numericAmount,
+          currency: currency.trim().toUpperCase(),
+          success_url: successURL,
+          cancel_url: cancelURL,
+        }),
       });
-      pollActive = false;
-      window.clearInterval(pollTimer);
-      setPaymentResult(result);
-      const trace = result.trace;
-      const summary = [
-        `Stage 6/6: Completed successfully`,
-        `Payment ID: ${result.payment_id}`,
-        `Leader: ${result.leader_id ?? "-"}`,
-        `Routed To Leader: ${trace?.routed_to_leader ? "Yes" : "No"}`,
-        `Quorum: ${trace?.ack_count ?? "-"}/${trace?.required_quorum ?? "-"}`,
-      ].join("\n");
-      showPaymentModal("success", "Payment Accepted", summary);
-      void refreshStatus();
-      void refreshLedger();
-      void refreshEvents();
+      window.location.assign(out.url);
     } catch (error) {
-      pollActive = false;
-      window.clearInterval(pollTimer);
-      setPaymentResult(null);
-      const message = getErrorMessage(error);
-      setPaymentError(message);
-      showPaymentModal("error", "Payment Failed", `Stage 6/6: Failed\n${message}`);
-      void refreshStatus();
-      void refreshLedger();
-      void refreshEvents();
-    } finally {
-      pollActive = false;
-      window.clearInterval(pollTimer);
+      setPaymentError(getErrorMessage(error));
       setPaymentLoading(false);
     }
   }
@@ -511,6 +608,52 @@ function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  useEffect(() => {
+    if (route !== "/client" || !selectedNodeUrl) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const stripeState = (params.get("stripe") || "").trim().toLowerCase();
+    const sessionID = (params.get("session_id") || "").trim();
+    const pid = (params.get("payment_id") || "").trim();
+    const amountParam = (params.get("amount") || "").trim();
+    const currencyParam = (params.get("currency") || "").trim().toUpperCase();
+
+    if (stripeState === "cancel") {
+      setPaymentError("Stripe checkout was canceled.");
+      return;
+    }
+    if (stripeState !== "success" || sessionID === "" || pid === "" || sessionID === stripeSessionHandled) {
+      return;
+    }
+
+    setStripeSessionHandled(sessionID);
+    const run = async () => {
+      try {
+        const status = await fetchJson<{ payment_status: string; metadata?: Record<string, string> }>(
+          `${selectedNodeUrl}/stripe/session-status?session_id=${encodeURIComponent(sessionID)}`,
+        );
+        if ((status.payment_status || "").toLowerCase() !== "paid") {
+          setPaymentError("Stripe payment is not marked paid.");
+          return;
+        }
+        const parsedAmount = Number(amountParam || amount);
+        const payload: PaymentRequest = {
+          payment_id: pid,
+          amount: parsedAmount,
+          currency: currencyParam || currency.trim().toUpperCase(),
+          simulate_outcome: "SUCCESS",
+        };
+        await submitDistributedPayment(payload, selectedNodeUrl);
+        const cleanURL = `${window.location.origin}/client`;
+        window.history.replaceState({}, "", cleanURL);
+      } catch (error) {
+        setPaymentError(getErrorMessage(error));
+      }
+    };
+    void run();
+  }, [route, selectedNodeUrl, stripeSessionHandled, amount, currency]);
+
   useEffect(
     () => () => {
       if (paymentModalTimeoutRef.current !== null) {
@@ -524,6 +667,30 @@ function App() {
       }
     },
     [],
+  );
+
+  const clientPaymentLogs = useMemo<ClientPaymentLogItem[]>(
+    () =>
+      ledgerItems
+        .filter((item) => item.status === "COMMITTED" || item.status === "FAILED")
+        .slice()
+        .sort((a, b) => {
+          if (a.log_index !== b.log_index) {
+            return b.log_index - a.log_index;
+          }
+          const at = new Date(a.created_at).getTime();
+          const bt = new Date(b.created_at).getTime();
+          return bt - at;
+        })
+        .map((item) => ({
+          id: item.payment_id,
+          amount: `${Number(item.amount).toFixed(2)} ${item.currency}`,
+          status: (item.status === "COMMITTED" ? "SUCCESS" : "FAILED") as "SUCCESS" | "FAILED",
+          at: item.created_at,
+          logIndex: item.log_index,
+        }))
+        .slice(0, 50),
+    [ledgerItems],
   );
 
   const navigate = (target: "/admin" | "/client") => {
@@ -632,10 +799,10 @@ function App() {
                 amount={amount}
                 currency={currency}
                 paymentLoading={paymentLoading}
+                currencyOptions={clientCurrencyOptions}
                 onAmountChange={setAmount}
                 onCurrencyChange={setCurrency}
-                onSimulateOutcomeChange={setSimulateOutcome}
-                onSubmit={handleSubmitPayment}
+                onSubmit={handleClientCheckoutSubmit}
               />
               {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
               {paymentResult ? (
@@ -643,6 +810,51 @@ function App() {
                   Payment {paymentResult.payment_id} processed by leader {paymentResult.leader_id ?? "-"}, quorum {paymentResult.trace?.ack_count ?? "-"}/{paymentResult.trace?.required_quorum ?? "-"}.
                 </div>
               ) : null}
+              <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="mb-3 text-sm font-semibold text-slate-900">Payment Log</h3>
+                <div className="overflow-x-auto rounded-md border border-slate-200">
+                  <table className="min-w-full table-fixed divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Amount</th>
+                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Status</th>
+                        <th className="w-2/5 px-3 py-2 text-left font-medium text-slate-600">Payment ID</th>
+                        <th className="w-1/5 px-3 py-2 text-left font-medium text-slate-600">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {clientPaymentLogs.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-3 text-slate-500" colSpan={4}>
+                            No payments yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        clientPaymentLogs.map((item) => (
+                          <tr key={`${item.id}-${item.at}`}>
+                            <td className="px-3 py-2 font-medium text-slate-800">{item.amount}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`inline-flex min-w-[78px] justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                                  item.status === "SUCCESS"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-red-200 bg-red-50 text-red-700"
+                                }`}
+                              >
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="truncate px-3 py-2 font-mono text-xs text-slate-700" title={item.id}>
+                              {item.id}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-slate-700">{new Date(item.at).toLocaleString()}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
           ) : (
             <div className="grid items-stretch gap-6 xl:grid-cols-12">

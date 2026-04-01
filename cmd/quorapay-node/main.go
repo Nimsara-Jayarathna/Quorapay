@@ -30,6 +30,7 @@ type config struct {
 	SkewRejectMS     int64
 	MaxMessageAgeMS  int64
 	MaxFutureDriftMS int64
+	StripeSecretKey  string
 }
 
 func main() {
@@ -78,6 +79,7 @@ func main() {
 		SkewRejectMS:     cfg.SkewRejectMS,
 		MaxMessageAgeMS:  cfg.MaxMessageAgeMS,
 		MaxFutureDriftMS: cfg.MaxFutureDriftMS,
+		StripeSecretKey:  cfg.StripeSecretKey,
 	}, coord, store, replService)
 
 	server := &http.Server{
@@ -227,6 +229,7 @@ func loadConfig() config {
 		SkewRejectMS:     getEnvInt64("SKEW_REJECT_MS", 500),
 		MaxMessageAgeMS:  getEnvInt64("MAX_MESSAGE_AGE_MS", 2000),
 		MaxFutureDriftMS: getEnvInt64("MAX_FUTURE_DRIFT_MS", 500),
+		StripeSecretKey:  getEnv("STRIPE_SECRET_KEY", ""),
 	}
 }
 
