@@ -1,116 +1,59 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type NodeStatus = {
-  node_id: string;
-  role: "LEADER" | "FOLLOWER" | string;
-  leader_id?: string;
-  leader_url?: string;
-  last_log_index?: number;
-  commit_index?: number;
-};
+import LedgerTable from "./components/LedgerTable";
+import NodeStatusPanel from "./components/NodeStatusPanel";
+import NodeTabs from "./components/NodeTabs";
+import NodeManagementModal from "./components/NodeManagementModal";
+import NodeActionModal from "./components/NodeActionModal";
+import NoNodesConnectedModal from "./components/NoNodesConnectedModal";
+import PaymentActionModal from "./components/PaymentActionModal";
+import PaymentForm from "./components/PaymentForm";
+import ClientStripeCheckout from "./components/ClientStripeCheckout";
+import {
+  AdminNodeActionResponse,
+  fetchJson,
+  fetchClusterNodes,
+  getErrorMessage,
+  LedgerResponse,
+  NodeStatus,
+  PaymentEventsResponse,
+  PaymentRequest,
+  PaymentResponse,
+  StatusFilter,
+} from "./lib/api";
 
-type PaymentRequest = {
-  payment_id: string;
-  amount: number;
-  currency: string;
-  note?: string;
-};
-
-type PaymentResponse = {
-  payment_id: string;
-  accepted: boolean;
-  status: "PENDING" | "COMMITTED" | "FAILED" | string;
-  message: string;
-  leader_url?: string;
-  record?: Record<string, unknown>;
-};
-
-type LedgerItem = {
-  log_index: number;
-  payment_id: string;
-  amount: number;
-  currency: string;
-  status: "COMMITTED" | "FAILED" | "PENDING" | string;
-  created_at: string;
-  server_id?: string;
-};
-
-type LedgerResponse = {
-  count: number;
-  items: LedgerItem[];
-};
-
-type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";
-
-const nodeUrls = (import.meta.env.VITE_NODE_URLS as string | undefined)
-  ?.split(",")
-  .map((url) => url.trim())
-  .filter(Boolean) ?? [];
+const configuredSeedNodeUrl = (import.meta.env.VITE_SEED_NODE_URL as string | undefined)?.trim() || "";
+const configuredBasePort = Number(import.meta.env.VITE_NODE_BASE_PORT ?? "8001");
+const basePort = Number.isInteger(configuredBasePort) && configuredBasePort > 0 ? configuredBasePort : 8001;
+const configuredPortStep = Number(import.meta.env.VITE_NODE_PORT_STEP ?? "1");
+const portStep = Number.isInteger(configuredPortStep) && configuredPortStep > 0 ? configuredPortStep : 1;
+const configuredScanCount = Number(import.meta.env.VITE_NODE_SCAN_COUNT ?? "3");
+const scanCount = Number.isInteger(configuredScanCount) && configuredScanCount > 0 ? configuredScanCount : 3;
+const configuredHost = (import.meta.env.VITE_NODE_HOST as string | undefined)?.trim() || window.location.hostname || "localhost";
+const generatedNodeUrls = Array.from({ length: scanCount }, (_, index) => `http://${configuredHost}:${basePort + index * portStep}`);
+const initialNodeUrls = configuredSeedNodeUrl
+  ? [configuredSeedNodeUrl, ...generatedNodeUrls.filter((url) => url !== configuredSeedNodeUrl)]
+  : generatedNodeUrls;
 
 const configuredDefaultIndex = Number(import.meta.env.VITE_DEFAULT_NODE_INDEX ?? "0");
 const defaultNodeIndex =
-  Number.isInteger(configuredDefaultIndex) && configuredDefaultIndex >= 0 && configuredDefaultIndex < nodeUrls.length
+  Number.isInteger(configuredDefaultIndex) && configuredDefaultIndex >= 0 && configuredDefaultIndex < initialNodeUrls.length
     ? configuredDefaultIndex
     : 0;
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "Unexpected error";
-}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 8000);
-
-  const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  try {
-    const response = await fetch(url, {
-      ...init,
-      headers,
-      signal: controller.signal,
-    });
-
-    const raw = await response.text();
-    let payload: unknown = null;
-    if (raw) {
-      try {
-        payload = JSON.parse(raw) as unknown;
-      } catch {
-        payload = raw;
-      }
-    }
-
-    if (!response.ok) {
-      if (payload && typeof payload === "object" && "message" in payload) {
-        throw new Error(String((payload as { message?: unknown }).message ?? `HTTP ${response.status}`));
-      }
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    return payload as T;
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Request timed out");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
-
-function formatDate(isoDate: string): string {
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) {
-    return isoDate;
-  }
-  return date.toLocaleString();
-}
+const configuredBlockingModalTimeoutMS = Number(import.meta.env.VITE_BLOCKING_MODAL_TIMEOUT_MS ?? "3000");
+const blockingModalTimeoutMS =
+  Number.isInteger(configuredBlockingModalTimeoutMS) && configuredBlockingModalTimeoutMS >= 0
+    ? configuredBlockingModalTimeoutMS
+    : 3000;
+const paymentModalManualCloseEnabled = String(import.meta.env.VITE_PAYMENT_MODAL_MANUAL_CLOSE_ENABLED ?? "true").toLowerCase() !== "false";
+const configuredInlineMessageTimeoutMS = Number(import.meta.env.VITE_INLINE_MESSAGE_TIMEOUT_MS ?? "4500");
+const inlineMessageTimeoutMS =
+  Number.isInteger(configuredInlineMessageTimeoutMS) && configuredInlineMessageTimeoutMS >= 0
+    ? configuredInlineMessageTimeoutMS
+    : 4500;
+const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
+const gatewayApiBaseUrl = (import.meta.env.VITE_GATEWAY_API_BASE_URL as string | undefined)?.trim() || "http://localhost:18100";
+const clientCurrencyOptions = ["USD", "EUR", "GBP", "LKR"];
 
 function generatePaymentId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -119,10 +62,70 @@ function generatePaymentId(): string {
   return `pay-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function App() {
-  const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
+function resolveRoute(pathname: string): "/admin" | "/client" | "not-found" {
+  if (pathname === "/admin" || pathname === "/") {
+    return "/admin";
+  }
+  if (pathname === "/client") {
+    return "/client";
+  }
+  return "not-found";
+}
 
+type ClientPaymentLogItem = {
+  id: string;
+  amount: string;
+  status: "SUCCESS" | "FAILED" | "CANCELED";
+  at: string;
+  logIndex: number;
+};
+
+function stageMessageFromEvent(stage: string): string {
+  switch (stage) {
+    case "RECEIVED":
+      return "Stage 1/6: Payment request received by selected node.";
+    case "FORWARDED_TO_LEADER":
+      return "Stage 2/6: Request forwarded to leader node.";
+    case "LEADER_PROCESSING":
+      return "Stage 3/6: Leader validating and processing Stripe payment.";
+    case "LEADER_RESPONSE_SUCCESS":
+      return "Stage 4/6: Leader returned successful processing response.";
+    case "LEADER_RESPONSE_FAILED":
+      return "Stage 4/6: Leader returned failed processing response.";
+    case "COMMITTED":
+      return "Stage 6/6: Payment committed and replicated.";
+    case "PROVIDER_FAILED":
+      return "Stage 5/6: Payment provider rejected transaction.";
+    case "QUORUM_NOT_REACHED":
+      return "Stage 5/6: Replication quorum not reached.";
+    case "REPLICATION_FAILED":
+      return "Stage 5/6: Replication failed during cluster write.";
+    default:
+      return "Processing payment across cluster nodes...";
+  }
+}
+
+function getProcessStageClasses(stage: string): string {
+  if (stage.includes("FAILED")) {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+  if (stage.includes("CANCELED")) {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (stage.includes("COMMITTED") || stage.includes("SUCCESS") || stage.includes("VERIFIED")) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
+function App() {
+  const [route, setRoute] = useState<"/admin" | "/client" | "not-found">(() => resolveRoute(window.location.pathname));
+
+  const [nodeUrls, setNodeUrls] = useState<string[]>(initialNodeUrls);
+  const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
   const selectedNodeUrl = nodeUrls[selectedNodeIndex] ?? "";
+  const [nodeMetaByUrl, setNodeMetaByUrl] = useState<Record<string, { nodeId?: string; role?: string }>>({});
+  const [nodeMetaLoaded, setNodeMetaLoaded] = useState(false);
 
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -131,27 +134,74 @@ function App() {
   const [paymentId, setPaymentId] = useState(generatePaymentId());
   const [amount, setAmount] = useState("10.00");
   const [currency, setCurrency] = useState("USD");
-  const [note, setNote] = useState("");
+  const [simulateOutcome, setSimulateOutcome] = useState<"SUCCESS" | "FAILED">("SUCCESS");
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentResult, setPaymentResult] = useState<PaymentResponse | null>(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentModalState, setPaymentModalState] = useState<"loading" | "success" | "error" | "info">("loading");
+  const [paymentModalTitle, setPaymentModalTitle] = useState("Processing Payment");
+  const [paymentModalMessage, setPaymentModalMessage] = useState("Submitting payment to cluster...");
+  const paymentModalTimeoutRef = useRef<number | null>(null);
+  const [stripeSessionHandled, setStripeSessionHandled] = useState<string>("");
 
-  const [ledgerItems, setLedgerItems] = useState<LedgerItem[]>([]);
+  const [ledgerItems, setLedgerItems] = useState<LedgerResponse["items"]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [eventItems, setEventItems] = useState<Array<{ timestamp: string; stage: string; message: string; payment_id?: string }>>([]);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+
+  const [shutdownLoading, setShutdownLoading] = useState(false);
+  const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
+  const shutdownMessageTimeoutRef = useRef<number | null>(null);
+  const [adminToken, setAdminToken] = useState<string>(() => window.localStorage.getItem("quorapay_admin_token") ?? "");
+  const [nodeManagementOpen, setNodeManagementOpen] = useState(false);
+  const [nodeManagementAction, setNodeManagementAction] = useState<"start" | "stop" | "restart">("start");
+  const [nodeManagementTargetNodeId, setNodeManagementTargetNodeId] = useState("A");
+  const [nodeActionModalOpen, setNodeActionModalOpen] = useState(false);
+  const [nodeActionModalState, setNodeActionModalState] = useState<"loading" | "success" | "error" | "info">("loading");
+  const [nodeActionModalTitle, setNodeActionModalTitle] = useState("Applying Node Action");
+  const [nodeActionModalMessage, setNodeActionModalMessage] = useState("Sending request...");
+  const nodeActionModalTimeoutRef = useRef<number | null>(null);
 
   const filteredLedgerItems = useMemo(() => {
-    if (statusFilter === "ALL") {
-      return ledgerItems;
-    }
-    return ledgerItems.filter((item) => item.status === statusFilter);
+    const filtered = statusFilter === "ALL" ? ledgerItems : ledgerItems.filter((item) => item.status === statusFilter);
+    return filtered.slice().sort((a, b) => {
+      if (a.log_index !== b.log_index) {
+        return b.log_index - a.log_index;
+      }
+      const at = new Date(a.created_at).getTime();
+      const bt = new Date(b.created_at).getTime();
+      return bt - at;
+    });
   }, [ledgerItems, statusFilter]);
+
+  const refreshTopology = useCallback(async () => {
+    const seeds = Array.from(new Set([...nodeUrls, ...generatedNodeUrls]));
+    for (const seed of seeds) {
+      try {
+        const discoveredUrls = await fetchClusterNodes(seed);
+        if (discoveredUrls.length > 0) {
+          setNodeUrls((prev) => {
+            const next = Array.from(new Set(discoveredUrls)).sort();
+            if (prev.length === next.length && prev.every((value, idx) => value === next[idx])) {
+              return prev;
+            }
+            return next;
+          });
+          return;
+        }
+      } catch {
+        // try next seed
+      }
+    }
+  }, [nodeUrls]);
 
   const refreshStatus = useCallback(async () => {
     if (!selectedNodeUrl) {
       setStatus(null);
-      setStatusError("Node unreachable: no node URL configured. Check VITE_NODE_URLS.");
+      setStatusError("Node unreachable: no node URL configured. Check VITE_SEED_NODE_URL and scan settings.");
       return;
     }
 
@@ -168,10 +218,32 @@ function App() {
     }
   }, [selectedNodeUrl]);
 
+  const refreshNodeMeta = useCallback(async () => {
+    const next: Record<string, { nodeId?: string; role?: string }> = {};
+    await Promise.all(
+      nodeUrls.map(async (url) => {
+        try {
+          const data = await fetchJson<NodeStatus>(`${url}/status`);
+          next[url] = { nodeId: data.node_id, role: data.role };
+        } catch {
+          next[url] = {};
+        }
+      }),
+    );
+    setNodeMetaByUrl(next);
+    setNodeMetaLoaded(true);
+  }, [nodeUrls]);
+
+  const connectedNodeCount = useMemo(
+    () => Object.values(nodeMetaByUrl).filter((meta) => Boolean(meta.nodeId)).length,
+    [nodeMetaByUrl],
+  );
+  const noNodesConnected = nodeUrls.length === 0 || (nodeMetaLoaded && connectedNodeCount === 0);
+
   const refreshLedger = useCallback(async () => {
     if (!selectedNodeUrl) {
       setLedgerItems([]);
-      setLedgerError("No node URL configured. Check VITE_NODE_URLS.");
+      setLedgerError("No node URL configured. Check VITE_SEED_NODE_URL and scan settings.");
       return;
     }
 
@@ -188,25 +260,200 @@ function App() {
     }
   }, [selectedNodeUrl]);
 
+  const refreshEvents = useCallback(async () => {
+    if (!selectedNodeUrl) {
+      return;
+    }
+    try {
+      const result = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events`);
+      setEventItems(result.items ?? []);
+      setEventsError(null);
+    } catch (error) {
+      setEventItems([]);
+      setEventsError(getErrorMessage(error));
+    }
+  }, [selectedNodeUrl]);
+
+  const prioritizedNodeUrls = useMemo(() => {
+    const urls = nodeUrls.filter(Boolean);
+    if (!selectedNodeUrl) {
+      return urls;
+    }
+    return [selectedNodeUrl, ...urls.filter((url) => url !== selectedNodeUrl)];
+  }, [nodeUrls, selectedNodeUrl]);
+
+  async function fetchJsonWithNodeFailover<T>(path: string, init?: RequestInit): Promise<T> {
+    const candidates = prioritizedNodeUrls;
+    let lastError: unknown = new Error("No node URL available");
+    for (const base of candidates) {
+      try {
+        return await fetchJson<T>(`${base}${path}`, init);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  async function fetchJsonViaGateway<T>(path: string, init?: RequestInit): Promise<T> {
+    return fetchJson<T>(`${gatewayApiBaseUrl}${path}`, init);
+  }
+
+  const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
+    if (paymentModalTimeoutRef.current !== null) {
+      window.clearTimeout(paymentModalTimeoutRef.current);
+      paymentModalTimeoutRef.current = null;
+    }
+    setPaymentModalState(state);
+    setPaymentModalTitle(title);
+    setPaymentModalMessage(message);
+    setPaymentModalOpen(true);
+    if (state !== "loading" && !paymentModalManualCloseEnabled) {
+      paymentModalTimeoutRef.current = window.setTimeout(() => {
+        setPaymentModalOpen(false);
+        paymentModalTimeoutRef.current = null;
+      }, blockingModalTimeoutMS);
+    }
+  };
+
+  const closePaymentModal = useCallback(() => {
+    if (paymentModalTimeoutRef.current !== null) {
+      window.clearTimeout(paymentModalTimeoutRef.current);
+      paymentModalTimeoutRef.current = null;
+    }
+    setPaymentModalOpen(false);
+  }, []);
+
+  async function submitDistributedPayment(payload: PaymentRequest) {
+    const requestedPaymentID = payload.payment_id.trim();
+    const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
+      if (paymentModalTimeoutRef.current !== null) {
+        window.clearTimeout(paymentModalTimeoutRef.current);
+        paymentModalTimeoutRef.current = null;
+      }
+      setPaymentModalState(state);
+      setPaymentModalTitle(title);
+      setPaymentModalMessage(message);
+      setPaymentModalOpen(true);
+      if (state !== "loading") {
+        paymentModalTimeoutRef.current = window.setTimeout(() => {
+          setPaymentModalOpen(false);
+          paymentModalTimeoutRef.current = null;
+        }, blockingModalTimeoutMS);
+      }
+    };
+
+    setPaymentLoading(true);
+    setPaymentError(null);
+    showPaymentModal("loading", "Processing Payment", "Stage 1/6: Payment request received by selected node.");
+
+    let pollActive = true;
+    let lastStage = "";
+    let safetyTimeout: number | null = null;
+    const pollEvents = async () => {
+      try {
+        const events = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events?payment_id=${encodeURIComponent(requestedPaymentID)}`);
+        const latest = events.items?.[events.items.length - 1];
+        if (latest && latest.stage !== lastStage) {
+          lastStage = latest.stage;
+          showPaymentModal("loading", "Processing Payment", stageMessageFromEvent(latest.stage));
+        }
+      } catch {
+        // ignore polling failures while payment request is in progress
+      }
+    };
+    void pollEvents();
+    const pollTimer = window.setInterval(() => {
+      if (!pollActive) {
+        return;
+      }
+      void pollEvents();
+    }, 700);
+    safetyTimeout = window.setTimeout(() => {
+      if (!pollActive) {
+        return;
+      }
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      showPaymentModal("error", "Payment Timeout", "Payment processing took too long. Please refresh and check ledger/events.");
+      setPaymentLoading(false);
+    }, 30000);
+
+    try {
+      const result = await fetchJsonWithNodeFailover<PaymentResponse>(`/pay`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      setPaymentResult(result);
+      const trace = result.trace;
+      const summary = [
+        `Stage 6/6: Completed successfully`,
+        `Payment ID: ${result.payment_id}`,
+        `Leader: ${result.leader_id ?? "-"}`,
+        `Routed To Leader: ${trace?.routed_to_leader ? "Yes" : "No"}`,
+        `Quorum: ${trace?.ack_count ?? "-"}/${trace?.required_quorum ?? "-"}`,
+      ].join("\n");
+      showPaymentModal("success", "Payment Accepted", summary);
+      void refreshStatus();
+      void refreshLedger();
+      void refreshEvents();
+    } catch (error) {
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      setPaymentResult(null);
+      const message = getErrorMessage(error);
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Failed", `Stage 6/6: Failed\n${message}`);
+      void refreshStatus();
+      void refreshLedger();
+      void refreshEvents();
+    } finally {
+      pollActive = false;
+      window.clearInterval(pollTimer);
+      if (safetyTimeout !== null) {
+        window.clearTimeout(safetyTimeout);
+      }
+      setPaymentLoading(false);
+    }
+  }
+
   async function handleSubmitPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!selectedNodeUrl) {
-      setPaymentError("No node URL configured. Check VITE_NODE_URLS.");
+      const message = "No node URL configured. Check VITE_SEED_NODE_URL and scan settings.";
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Failed", message);
       return;
     }
 
     const numericAmount = Number(amount);
     if (!paymentId.trim()) {
-      setPaymentError("payment_id is required.");
+      const message = "payment_id is required.";
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Validation Error", message);
       return;
     }
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      setPaymentError("amount must be a positive number.");
+      const message = "amount must be a positive number.";
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Validation Error", message);
       return;
     }
     if (!currency.trim()) {
-      setPaymentError("currency is required.");
+      const message = "currency is required.";
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Validation Error", message);
       return;
     }
 
@@ -214,262 +461,626 @@ function App() {
       payment_id: paymentId.trim(),
       amount: numericAmount,
       currency: currency.trim().toUpperCase(),
-      note: note.trim() || undefined,
+      simulate_outcome: simulateOutcome,
     };
+    await submitDistributedPayment(payload);
+  }
+
+  async function handleClientCheckoutSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedNodeUrl) {
+      setPaymentError("No node URL configured.");
+      return;
+    }
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0 || !currency.trim()) {
+      setPaymentError("Valid amount and currency are required.");
+      return;
+    }
+    const pid = paymentId.trim() || generatePaymentId();
+    setPaymentId(pid);
+
+    const successURL = `${window.location.origin}/client?stripe=success&session_id={CHECKOUT_SESSION_ID}&payment_id=${encodeURIComponent(pid)}&amount=${encodeURIComponent(
+      numericAmount.toFixed(2),
+    )}&currency=${encodeURIComponent(currency.trim().toUpperCase())}`;
+    const cancelURL = `${window.location.origin}/client?stripe=cancel&payment_id=${encodeURIComponent(pid)}`;
 
     setPaymentLoading(true);
     setPaymentError(null);
+    try {
+      const out = await fetchJsonViaGateway<{ session_id: string; url: string }>(`/payments/checkout-session`, {
+        method: "POST",
+        body: JSON.stringify({
+          payment_id: pid,
+          amount: numericAmount,
+          currency: currency.trim().toUpperCase(),
+          success_url: successURL,
+          cancel_url: cancelURL,
+        }),
+      });
+      window.location.assign(out.url);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Service Unavailable", message);
+      setPaymentLoading(false);
+    }
+  }
+
+  const selectedNodeId = status?.node_id || nodeMetaByUrl[selectedNodeUrl]?.nodeId || "";
+
+  const knownNodeIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          Object.values(nodeMetaByUrl)
+            .map((meta) => (meta.nodeId || "").trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ),
+    [nodeMetaByUrl],
+  );
+
+  useEffect(() => {
+    if (nodeManagementAction === "start") {
+      const firstStartable = Array.from({ length: 26 }, (_, idx) => String.fromCharCode(65 + idx)).find((id) => !knownNodeIds.includes(id));
+      if (!firstStartable) {
+        setNodeManagementTargetNodeId("A");
+        return;
+      }
+      if (!nodeManagementTargetNodeId || knownNodeIds.includes(nodeManagementTargetNodeId)) {
+        setNodeManagementTargetNodeId(firstStartable);
+      }
+      return;
+    }
+    if (knownNodeIds.length > 0 && !knownNodeIds.includes(nodeManagementTargetNodeId)) {
+      setNodeManagementTargetNodeId(knownNodeIds[0]);
+    }
+  }, [knownNodeIds, nodeManagementAction, nodeManagementTargetNodeId]);
+
+  const openNodeManagement = useCallback(
+    (action: "start" | "stop" | "restart") => {
+      setNodeManagementAction(action);
+      if (action === "start") {
+        const firstStartable = Array.from({ length: 26 }, (_, idx) => String.fromCharCode(65 + idx)).find((id) => !knownNodeIds.includes(id));
+        setNodeManagementTargetNodeId(firstStartable || "A");
+      } else {
+        setNodeManagementTargetNodeId(selectedNodeId || knownNodeIds[0] || "");
+      }
+      setNodeManagementOpen(true);
+    },
+    [knownNodeIds, selectedNodeId],
+  );
+
+  async function handleNodeAction(action: "start" | "stop" | "restart", nodeId: string) {
+    const targetNodeId = nodeId.trim().toUpperCase();
+    const actionLabel = action === "start" ? "Start" : action === "stop" ? "Terminate" : "Restart";
+    const showNodeActionModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
+      if (nodeActionModalTimeoutRef.current !== null) {
+        window.clearTimeout(nodeActionModalTimeoutRef.current);
+        nodeActionModalTimeoutRef.current = null;
+      }
+      setNodeActionModalState(state);
+      setNodeActionModalTitle(title);
+      setNodeActionModalMessage(message);
+      setNodeActionModalOpen(true);
+      if (state !== "loading") {
+        nodeActionModalTimeoutRef.current = window.setTimeout(() => {
+          setNodeActionModalOpen(false);
+          nodeActionModalTimeoutRef.current = null;
+        }, blockingModalTimeoutMS);
+      }
+    };
+
+    if (!targetNodeId) {
+      setShutdownMessage("Node ID is required.");
+      return;
+    }
+    if (!/^[A-Z]$/.test(targetNodeId)) {
+      setShutdownMessage("Node ID must be a single letter (A-Z).");
+      return;
+    }
+    if (action !== "start" && knownNodeIds.length > 0 && !knownNodeIds.includes(targetNodeId)) {
+      setShutdownMessage(`Unknown node ID: ${targetNodeId}.`);
+      return;
+    }
+    if (!adminToken.trim()) {
+      setShutdownMessage("Admin token is required.");
+      return;
+    }
+
+    setShutdownLoading(true);
+    showNodeActionModal("loading", `${actionLabel} Node`, `Applying ${action} on node ${targetNodeId}...`);
+    setNodeManagementOpen(false);
+    if (shutdownMessageTimeoutRef.current !== null) {
+      window.clearTimeout(shutdownMessageTimeoutRef.current);
+      shutdownMessageTimeoutRef.current = null;
+    }
+    setShutdownMessage(null);
 
     try {
-      const result = await fetchJson<PaymentResponse>(`${selectedNodeUrl}/pay`, {
+      const result = await fetchJson<AdminNodeActionResponse>(`${adminApiBaseUrl}/admin/node/${targetNodeId}/${action}`, {
         method: "POST",
-        body: JSON.stringify(payload),
+        headers: {
+          Authorization: `Bearer ${adminToken.trim()}`,
+        },
       });
-      setPaymentResult(result);
-      void refreshStatus();
-      void refreshLedger();
+      setShutdownMessage(`Node ${result.node_id} ${result.action} requested.`);
+      showNodeActionModal("success", `${actionLabel} Requested`, `Node ${result.node_id} ${result.action} requested.`);
+      shutdownMessageTimeoutRef.current = window.setTimeout(() => {
+        setShutdownMessage(null);
+        shutdownMessageTimeoutRef.current = null;
+      }, 3000);
+      window.setTimeout(() => {
+        void refreshStatus();
+        void refreshNodeMeta();
+      }, 600);
     } catch (error) {
-      setPaymentResult(null);
-      setPaymentError(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setShutdownMessage(message);
+      showNodeActionModal("error", `${actionLabel} Failed`, message);
     } finally {
-      setPaymentLoading(false);
+      setShutdownLoading(false);
     }
   }
 
   useEffect(() => {
     void refreshStatus();
     void refreshLedger();
-  }, [refreshStatus, refreshLedger]);
+    void refreshEvents();
+  }, [refreshStatus, refreshLedger, refreshEvents]);
 
-  return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Quorapay Web Client</h1>
-        <p className="mt-1 text-sm text-slate-600">Submit payments, inspect node status, and view replicated ledger data.</p>
-      </header>
+  useEffect(() => {
+    void refreshNodeMeta();
+    const intervalId = window.setInterval(() => {
+      void refreshNodeMeta();
+      void refreshEvents();
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshNodeMeta, refreshEvents]);
 
-      {nodeUrls.length === 0 ? (
-        <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          No nodes configured. Add `VITE_NODE_URLS` in `.env` based on `.env.example`.
-        </div>
-      ) : null}
+  useEffect(() => {
+    void refreshTopology();
+    const intervalId = window.setInterval(() => {
+      void refreshTopology();
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshTopology]);
 
-      {statusError ? (
-        <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div>
-      ) : null}
+  useEffect(() => {
+    if (selectedNodeIndex >= nodeUrls.length) {
+      setSelectedNodeIndex(0);
+    }
+  }, [nodeUrls, selectedNodeIndex]);
 
-      <div className="space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium text-slate-900">Node Selector + Status</h2>
+  useEffect(() => {
+    const onPopState = () => {
+      setRoute(resolveRoute(window.location.pathname));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (route !== "/client" || !selectedNodeUrl) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const stripeState = (params.get("stripe") || "").trim().toLowerCase();
+    const sessionID = (params.get("session_id") || "").trim();
+    const pid = (params.get("payment_id") || "").trim();
+    const amountParam = (params.get("amount") || "").trim();
+    const currencyParam = (params.get("currency") || "").trim().toUpperCase();
+
+    if (stripeState === "cancel") {
+      const cancelledID = (params.get("payment_id") || "").trim();
+      if (cancelledID) {
+        void fetchJsonViaGateway(`/payments/cancel`, {
+          method: "POST",
+          body: JSON.stringify({
+            payment_id: cancelledID,
+            reason: "stripe checkout canceled by user",
+            amount: Number(amount),
+            currency: currency.trim().toUpperCase(),
+          }),
+        }).catch(() => {
+          // Cancellation linkage is best-effort.
+        });
+      }
+      setPaymentError(null);
+      showPaymentModal(
+        "info",
+        "Payment Canceled",
+        `Stripe checkout was canceled.\nPayment ID: ${cancelledID || "N/A"}`,
+      );
+      const cleanURL = `${window.location.origin}/client`;
+      window.history.replaceState({}, "", cleanURL);
+      return;
+    }
+    if (stripeState !== "success" || sessionID === "" || pid === "" || sessionID === stripeSessionHandled) {
+      return;
+    }
+
+    setStripeSessionHandled(sessionID);
+    const run = async () => {
+      try {
+        setPaymentLoading(true);
+        showPaymentModal("loading", "Finalizing Payment", "Stripe paid. Finalizing with current cluster leader...");
+        const result = await fetchJsonViaGateway<PaymentResponse>(`/payments/finalize`, {
+          method: "POST",
+          body: JSON.stringify({ session_id: sessionID }),
+        });
+        setPaymentResult(result);
+        const paidAmount = amountParam && !Number.isNaN(Number(amountParam)) ? `${Number(amountParam).toFixed(2)} ${currencyParam || "USD"}` : "Payment completed";
+        showPaymentModal(
+          "success",
+          "Payment Successful",
+          `${paidAmount}\nPayment ID: ${result.payment_id}`,
+        );
+        void refreshStatus();
+        void refreshLedger();
+        void refreshEvents();
+        const cleanURL = `${window.location.origin}/client`;
+        window.history.replaceState({}, "", cleanURL);
+      } catch (error) {
+        setPaymentError(getErrorMessage(error));
+        showPaymentModal("error", "Payment Finalization Failed", getErrorMessage(error));
+      } finally {
+        setPaymentLoading(false);
+      }
+    };
+    void run();
+  }, [route, selectedNodeUrl, stripeSessionHandled, amount, currency]);
+
+  useEffect(
+    () => () => {
+      if (paymentModalTimeoutRef.current !== null) {
+        window.clearTimeout(paymentModalTimeoutRef.current);
+      }
+      if (shutdownMessageTimeoutRef.current !== null) {
+        window.clearTimeout(shutdownMessageTimeoutRef.current);
+      }
+      if (nodeActionModalTimeoutRef.current !== null) {
+        window.clearTimeout(nodeActionModalTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!paymentError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setPaymentError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [paymentError]);
+
+  useEffect(() => {
+    if (!statusError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setStatusError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [statusError]);
+
+  useEffect(() => {
+    if (!ledgerError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setLedgerError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [ledgerError]);
+
+  useEffect(() => {
+    if (!eventsError) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setEventsError(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [eventsError]);
+
+  useEffect(() => {
+    if (!shutdownMessage) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setShutdownMessage(null), inlineMessageTimeoutMS);
+    return () => window.clearTimeout(timeoutID);
+  }, [shutdownMessage]);
+
+  const clientPaymentLogs = useMemo<ClientPaymentLogItem[]>(
+    () =>
+      ledgerItems
+        .filter((item) => item.status === "COMMITTED" || item.status === "FAILED" || item.status === "CANCELED")
+        .slice()
+        .sort((a, b) => {
+          if (a.log_index !== b.log_index) {
+            return b.log_index - a.log_index;
+          }
+          const at = new Date(a.created_at).getTime();
+          const bt = new Date(b.created_at).getTime();
+          return bt - at;
+        })
+        .map((item) => ({
+          id: item.payment_id,
+          amount: `${Number(item.amount).toFixed(2)} ${item.currency}`,
+          status: (item.status === "COMMITTED" ? "SUCCESS" : item.status === "FAILED" ? "FAILED" : "CANCELED") as
+            | "SUCCESS"
+            | "FAILED"
+            | "CANCELED",
+          at: item.created_at,
+          logIndex: item.log_index,
+        }))
+        .slice(0, 50),
+    [ledgerItems],
+  );
+
+  const navigate = (target: "/admin" | "/client") => {
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, "", target);
+      setRoute(resolveRoute(target));
+    }
+  };
+
+  if (route === "not-found") {
+    return (
+      <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
+        <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">Route Not Found</h1>
+          <p className="mt-2 text-sm text-slate-600">Only `/admin` and `/client` are valid routes in this prototype.</p>
+          <div className="mt-4 flex gap-2">
             <button
               type="button"
-              onClick={() => void refreshStatus()}
-              disabled={statusLoading}
-              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => navigate("/admin")}
+              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
-              {statusLoading ? "Refreshing..." : "Refresh Status"}
+              Go to Admin
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/client")}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Go to Client
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
 
-          <div className="mb-4 grid gap-3 sm:grid-cols-[220px_1fr] sm:items-center">
-            <label htmlFor="node-select" className="text-sm font-medium text-slate-700">
-              Active node
-            </label>
-            <select
-              id="node-select"
-              value={selectedNodeIndex}
-              onChange={(event) => setSelectedNodeIndex(Number(event.target.value))}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+  return (
+    <div className="relative">
+      <PaymentActionModal
+        open={paymentModalOpen}
+        state={paymentModalState}
+        title={paymentModalTitle}
+        message={paymentModalMessage}
+        canClose={paymentModalManualCloseEnabled}
+        onClose={closePaymentModal}
+      />
+      <NodeManagementModal
+        open={nodeManagementOpen}
+        action={nodeManagementAction}
+        targetNodeId={nodeManagementTargetNodeId}
+        knownNodeIds={knownNodeIds}
+        adminToken={adminToken}
+        loading={shutdownLoading}
+        message={shutdownMessage}
+        onClose={() => setNodeManagementOpen(false)}
+        onTargetNodeIdChange={(value) => setNodeManagementTargetNodeId(value.trim().toUpperCase())}
+        onAdminTokenChange={(value) => {
+          setAdminToken(value);
+          window.localStorage.setItem("quorapay_admin_token", value);
+        }}
+        onConfirm={() => void handleNodeAction(nodeManagementAction, nodeManagementTargetNodeId)}
+      />
+      <NodeActionModal open={nodeActionModalOpen} state={nodeActionModalState} title={nodeActionModalTitle} message={nodeActionModalMessage} />
+      <NoNodesConnectedModal
+        open={noNodesConnected}
+        onRetry={() => {
+          void refreshTopology();
+          void refreshNodeMeta();
+          void refreshStatus();
+          void refreshEvents();
+        }}
+      />
+
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-3">
+              <img src="/logo.svg" alt="Quorapay" className="h-9 w-9 rounded-md object-contain" />
+              <h1 className="text-2xl font-semibold text-slate-900">Quorapay Prototype</h1>
+            </div>
+            <p className="mt-1 text-sm text-slate-600">Distributed payment simulation with selected-node perspective and process logs.</p>
+          </div>
+          <div className="inline-flex rounded-md border border-slate-300 bg-white p-1">
+            <button
+              type="button"
+              className={`rounded px-3 py-1.5 text-sm font-medium ${route === "/admin" ? "bg-slate-900 text-white" : "text-slate-700"}`}
+              onClick={() => navigate("/admin")}
             >
-              {nodeUrls.map((url, index) => (
-                <option key={url} value={index}>
-                  {`Node ${String.fromCharCode(65 + index)} - ${url}`}
-                </option>
-              ))}
-            </select>
+              Admin UI
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1.5 text-sm font-medium ${route === "/client" ? "bg-slate-900 text-white" : "text-slate-700"}`}
+              onClick={() => navigate("/client")}
+            >
+              Client UI
+            </button>
           </div>
+        </header>
 
-          <div className="overflow-hidden rounded-md border border-slate-200">
-            <dl className="grid grid-cols-1 divide-y divide-slate-200 text-sm sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">node_id</dt>
-                <dd className="mt-1 text-slate-900">{status?.node_id ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">role</dt>
-                <dd className="mt-1 text-slate-900">{status?.role ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">leader_id</dt>
-                <dd className="mt-1 text-slate-900">{status?.leader_id ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">leader_url</dt>
-                <dd className="mt-1 break-all text-slate-900">{status?.leader_url ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">last_log_index</dt>
-                <dd className="mt-1 text-slate-900">{status?.last_log_index ?? "-"}</dd>
-              </div>
-              <div className="p-3">
-                <dt className="font-medium text-slate-500">commit_index</dt>
-                <dd className="mt-1 text-slate-900">{status?.commit_index ?? "-"}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
+        {statusError ? <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div> : null}
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-medium text-slate-900">Create Payment</h2>
-          <form className="grid gap-4" onSubmit={handleSubmitPayment}>
-            <div className="grid gap-2">
-              <label htmlFor="payment-id" className="text-sm font-medium text-slate-700">
-                payment_id
-              </label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  id="payment-id"
-                  value={paymentId}
-                  onChange={(event) => setPaymentId(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                  placeholder="Unique idempotency key"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPaymentId(generatePaymentId())}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Generate payment_id
-                </button>
-              </div>
-            </div>
+        <div className="space-y-6">
+          <NodeTabs
+            nodeUrls={nodeUrls}
+            selectedNodeIndex={selectedNodeIndex}
+            onSelectNode={setSelectedNodeIndex}
+            nodeMetaByUrl={nodeMetaByUrl}
+            showControls={route === "/admin"}
+            onOpenNodeManagement={route === "/admin" ? openNodeManagement : undefined}
+          />
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <label htmlFor="amount" className="text-sm font-medium text-slate-700">
-                  amount
-                </label>
-                <input
-                  id="amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                />
-              </div>
-              <div className="grid gap-2">
-                <label htmlFor="currency" className="text-sm font-medium text-slate-700">
-                  currency
-                </label>
-                <input
-                  id="currency"
-                  value={currency}
-                  onChange={(event) => setCurrency(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-400 focus:outline-none"
-                  placeholder="USD"
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <label htmlFor="note" className="text-sm font-medium text-slate-700">
-                note (optional)
-              </label>
-              <input
-                id="note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                placeholder="Optional note"
+          {route === "/client" ? (
+            <div className="mx-auto max-w-5xl">
+              <ClientStripeCheckout
+                amount={amount}
+                currency={currency}
+                paymentLoading={paymentLoading}
+                currencyOptions={clientCurrencyOptions}
+                onAmountChange={setAmount}
+                onCurrencyChange={setCurrency}
+                onSubmit={handleClientCheckoutSubmit}
               />
+              <section className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-slate-900">Payment Log</h3>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {clientPaymentLogs.length} records
+                  </span>
+                </div>
+                <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200">
+                  <table className="min-w-full table-fixed divide-y divide-slate-200 text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-50">
+                      <tr>
+                        <th className="w-[18%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Amount</th>
+                        <th className="w-[14%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                        <th className="w-[38%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Payment ID</th>
+                        <th className="w-[30%] px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {clientPaymentLogs.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-6 text-center text-slate-500" colSpan={4}>
+                            No payments yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        clientPaymentLogs.map((item) => (
+                          <tr key={`${item.id}-${item.at}`} className="odd:bg-white even:bg-slate-50/45">
+                            <td className="px-3 py-2.5 font-medium text-slate-800">{item.amount}</td>
+                            <td className="px-3 py-2.5">
+                              <span
+                                className={`inline-flex min-w-[78px] justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                                  item.status === "SUCCESS"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : item.status === "FAILED"
+                                      ? "border-red-200 bg-red-50 text-red-700"
+                                      : "border-amber-200 bg-amber-50 text-amber-700"
+                                }`}
+                              >
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="truncate px-3 py-2.5 font-mono text-xs text-slate-700" title={item.id}>
+                              {item.id}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-700">{new Date(item.at).toLocaleString()}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
+          ) : (
+            <div className="grid items-stretch gap-6 xl:grid-cols-12">
+              <div className="xl:col-span-7">
+                <NodeStatusPanel
+                  status={status}
+                  statusLoading={statusLoading}
+                  nodeActionLoading={shutdownLoading}
+                  shutdownMessage={shutdownMessage}
+                  selectedNodeId={selectedNodeId}
+                  onRefreshStatus={() => void refreshStatus()}
+                  onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
+                />
+              </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="submit"
-                disabled={paymentLoading}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {paymentLoading ? "Submitting..." : "Submit Payment"}
-              </button>
-              {paymentError ? <span className="text-sm text-red-700">{paymentError}</span> : null}
-              {paymentResult ? <span className="text-sm text-slate-600">{`${paymentResult.status}: ${paymentResult.message}`}</span> : null}
+              <div className="xl:col-span-5">
+                <PaymentForm
+                  paymentId={paymentId}
+                  amount={amount}
+                  currency={currency}
+                  simulateOutcome={simulateOutcome}
+                  paymentLoading={paymentLoading}
+                  onPaymentIdChange={setPaymentId}
+                  onAmountChange={setAmount}
+                  onCurrencyChange={setCurrency}
+                  onSimulateOutcomeChange={setSimulateOutcome}
+                  onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
+                  onSubmit={handleSubmitPayment}
+                />
+              </div>
             </div>
-          </form>
+          )}
 
-          <div className="mt-4">
-            <h3 className="text-sm font-medium text-slate-700">Response</h3>
-            <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-900 p-3 font-mono text-xs text-slate-100">
-              {paymentResult ? JSON.stringify(paymentResult, null, 2) : "No response yet."}
-            </pre>
-          </div>
-        </section>
+          {route === "/admin" ? (
+            <>
+              <LedgerTable
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                ledgerLoading={ledgerLoading}
+                ledgerError={ledgerError}
+                items={filteredLedgerItems}
+                onRefreshLedger={() => void refreshLedger()}
+              />
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium text-slate-900">Ledger Viewer</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-              >
-                <option value="ALL">All</option>
-                <option value="COMMITTED">Committed</option>
-                <option value="FAILED">Failed</option>
-                <option value="PENDING">Pending</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => void refreshLedger()}
-                disabled={ledgerLoading}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {ledgerLoading ? "Refreshing..." : "Refresh Ledger"}
-              </button>
-            </div>
-          </div>
-
-          {ledgerError ? <div className="mb-3 text-sm text-red-700">Ledger error: {ledgerError}</div> : null}
-
-          <div className="overflow-x-auto rounded-md border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">log_index</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">payment_id</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">amount</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">currency</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">created_at</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredLedgerItems.length === 0 ? (
-                  <tr>
-                    <td className="px-3 py-4 text-slate-500" colSpan={6}>
-                      No ledger entries to display.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredLedgerItems.map((item) => (
-                    <tr key={`${item.log_index}-${item.payment_id}`}>
-                      <td className="px-3 py-2 text-slate-700">{item.log_index}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.amount}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.currency}</td>
-                      <td className="px-3 py-2 text-slate-700">{item.status}</td>
-                      <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-medium text-slate-900">Payment Process Logs (Selected Node)</h2>
+                  <button
+                    type="button"
+                    onClick={() => void refreshEvents()}
+                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+                  >
+                    Refresh Logs
+                  </button>
+                </div>
+                {eventsError ? <div className="mb-2 text-sm text-red-700">Log error: {eventsError}</div> : null}
+                <div className="max-h-72 overflow-auto rounded-md border border-slate-200">
+                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Timestamp</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Stage</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Payment</th>
+                        <th className="px-3 py-2 text-left font-medium text-slate-600">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {eventItems.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-4 text-slate-500" colSpan={4}>
+                            No process logs.
+                          </td>
+                        </tr>
+                      ) : (
+                        eventItems.slice().reverse().map((item, idx) => (
+                          <tr key={`${item.timestamp}-${item.stage}-${idx}`}>
+                            <td className="px-3 py-2 text-slate-700">{new Date(item.timestamp).toLocaleString()}</td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${getProcessStageClasses(item.stage)}`}>
+                                {item.stage}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id ?? "-"}</td>
+                            <td className="px-3 py-2 text-slate-700">{item.message}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );
