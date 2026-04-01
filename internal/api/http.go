@@ -79,6 +79,8 @@ type handler struct {
 	eventsMu         sync.RWMutex
 	events           []PaymentEvent
 	stripeClient     *payment.StripeClient
+	paymentLockMu    sync.Mutex
+	paymentLocks     map[string]*sync.Mutex
 }
 
 type PaymentEvent struct {
@@ -124,6 +126,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 		maxMessageAge:    durationOrDefaultMS(cfg.MaxMessageAgeMS, 2*time.Second),
 		maxFutureDrift:   durationOrDefaultMS(cfg.MaxFutureDriftMS, 500*time.Millisecond),
 		stripeClient:     payment.NewStripeClient(cfg.StripeSecretKey),
+		paymentLocks:     make(map[string]*sync.Mutex),
 	}
 
 	mux := http.NewServeMux()
@@ -350,6 +353,9 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) processPaymentRequest(ctx context.Context, req replication.PaymentRequest, receivedBy string) (replication.PaymentResponse, int, error) {
+	unlock := h.lockPaymentID(req.PaymentID)
+	defer unlock()
+
 	status := h.coordinator.CurrentStatus()
 	h.recordEvent(PaymentEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -520,6 +526,24 @@ func (h *handler) processPaymentRequest(ctx context.Context, req replication.Pay
 			FollowerResults: result.FollowerResults,
 		},
 	}, http.StatusOK, nil
+}
+
+func (h *handler) lockPaymentID(paymentID string) func() {
+	key := strings.TrimSpace(paymentID)
+	if key == "" {
+		return func() {}
+	}
+
+	h.paymentLockMu.Lock()
+	mu, ok := h.paymentLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		h.paymentLocks[key] = mu
+	}
+	h.paymentLockMu.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (h *handler) eventsHandler(w http.ResponseWriter, r *http.Request) {

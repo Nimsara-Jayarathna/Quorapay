@@ -46,6 +46,7 @@ const blockingModalTimeoutMS =
     ? configuredBlockingModalTimeoutMS
     : 3000;
 const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
+const gatewayApiBaseUrl = (import.meta.env.VITE_GATEWAY_API_BASE_URL as string | undefined)?.trim() || "http://localhost:18100";
 const clientCurrencyOptions = ["USD", "EUR", "GBP", "LKR"];
 
 function generatePaymentId(): string {
@@ -275,6 +276,10 @@ function App() {
     throw lastError;
   }
 
+  async function fetchJsonViaGateway<T>(path: string, init?: RequestInit): Promise<T> {
+    return fetchJson<T>(`${gatewayApiBaseUrl}${path}`, init);
+  }
+
   const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
     if (paymentModalTimeoutRef.current !== null) {
       window.clearTimeout(paymentModalTimeoutRef.current);
@@ -458,7 +463,7 @@ function App() {
     setPaymentLoading(true);
     setPaymentError(null);
     try {
-      const out = await fetchJsonWithNodeFailover<{ session_id: string; url: string }>(`/stripe/create-checkout-session`, {
+      const out = await fetchJsonViaGateway<{ session_id: string; url: string }>(`/payments/checkout-session`, {
         method: "POST",
         body: JSON.stringify({
           payment_id: pid,
@@ -653,7 +658,7 @@ function App() {
       try {
         setPaymentLoading(true);
         showPaymentModal("loading", "Finalizing Payment", "Stripe paid. Finalizing with current cluster leader...");
-        const result = await fetchJsonWithNodeFailover<PaymentResponse>(`/stripe/finalize-checkout-session`, {
+        const result = await fetchJsonViaGateway<PaymentResponse>(`/payments/finalize`, {
           method: "POST",
           body: JSON.stringify({ session_id: sessionID }),
         });
@@ -831,11 +836,6 @@ function App() {
                 onSubmit={handleClientCheckoutSubmit}
               />
               {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
-              {paymentResult ? (
-                <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  Payment {paymentResult.payment_id} processed by leader {paymentResult.leader_id ?? "-"}, quorum {paymentResult.trace?.ack_count ?? "-"}/{paymentResult.trace?.required_quorum ?? "-"}.
-                </div>
-              ) : null}
               <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="mb-3 text-sm font-semibold text-slate-900">Payment Log</h3>
                 <div className="overflow-x-auto rounded-md border border-slate-200">
