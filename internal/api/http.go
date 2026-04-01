@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -131,6 +133,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/pay", h.payHandler)
 	mux.HandleFunc("/stripe/create-checkout-session", h.stripeCreateCheckoutSessionHandler)
 	mux.HandleFunc("/stripe/session-status", h.stripeSessionStatusHandler)
+	mux.HandleFunc("/stripe/finalize-checkout-session", h.stripeFinalizeCheckoutSessionHandler)
 	mux.HandleFunc("/events", h.eventsHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
@@ -231,6 +234,61 @@ func (h *handler) stripeSessionStatusHandler(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+type stripeFinalizeCheckoutSessionRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+func (h *handler) stripeFinalizeCheckoutSessionHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	if h.stripeClient == nil || !h.stripeClient.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "stripe is not configured on this node"})
+		return
+	}
+
+	var req stripeFinalizeCheckoutSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "session_id is required"})
+		return
+	}
+
+	session, err := h.stripeClient.GetCheckoutSession(r.Context(), req.SessionID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(session.PaymentStatus)) != "paid" {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "stripe session is not paid"})
+		return
+	}
+
+	paymentID := strings.TrimSpace(session.Metadata["payment_id"])
+	amountRaw := strings.TrimSpace(session.Metadata["amount"])
+	currency := strings.ToUpper(strings.TrimSpace(session.Metadata["currency"]))
+	amount, err := strconv.ParseFloat(amountRaw, 64)
+	if paymentID == "" || amount <= 0 || currency == "" || err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "stripe metadata is incomplete"})
+		return
+	}
+
+	resp, code, err := h.processPaymentRequest(r.Context(), replication.PaymentRequest{
+		PaymentID: paymentID,
+		Amount:    amount,
+		Currency:  currency,
+	}, h.cfg.NodeID)
+	if err != nil {
+		writeJSON(w, code, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, code, resp)
+}
+
 func (h *handler) clusterNodesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
@@ -279,11 +337,20 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := h.coordinator.CurrentStatus()
 	receivedBy := strings.TrimSpace(r.Header.Get(receivedByHeader))
 	if receivedBy == "" {
 		receivedBy = h.cfg.NodeID
 	}
+	resp, code, err := h.processPaymentRequest(r.Context(), req, receivedBy)
+	if err != nil {
+		writeJSON(w, code, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, code, resp)
+}
+
+func (h *handler) processPaymentRequest(ctx context.Context, req replication.PaymentRequest, receivedBy string) (replication.PaymentResponse, int, error) {
+	status := h.coordinator.CurrentStatus()
 	h.recordEvent(PaymentEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		NodeID:    h.cfg.NodeID,
@@ -300,11 +367,33 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 				Stage:     "FORWARDED_TO_LEADER",
 				Message:   "request forwarded to leader",
 			})
-			h.forwardPayToLeader(w, r.Context(), status.LeaderURL, receivedBy, req)
-			return
+			code, body, fwdErr := h.forwardPayToLeaderJSON(ctx, status.LeaderURL, receivedBy, req)
+			if fwdErr != nil {
+				// leader may have changed; resolve again and retry once
+				latest := h.coordinator.CurrentStatus()
+				if strings.TrimSpace(latest.LeaderURL) != "" && latest.LeaderURL != status.LeaderURL {
+					code, body, fwdErr = h.forwardPayToLeaderJSON(ctx, latest.LeaderURL, receivedBy, req)
+				}
+			}
+			if fwdErr != nil {
+				return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("failed to reach leader")
+			}
+			if code < 200 || code >= 300 {
+				var out map[string]string
+				_ = json.Unmarshal(body, &out)
+				msg := strings.TrimSpace(out["message"])
+				if msg == "" {
+					msg = "leader returned error"
+				}
+				return replication.PaymentResponse{}, code, fmt.Errorf(msg)
+			}
+			var out replication.PaymentResponse
+			if err := json.Unmarshal(body, &out); err != nil {
+				return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("invalid leader response")
+			}
+			return out, http.StatusOK, nil
 		}
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "no leader available"})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("no leader available")
 	}
 	h.recordEvent(PaymentEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -318,7 +407,6 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToUpper(strings.TrimSpace(req.SimulateOutcome)) {
 	case "", "SUCCESS":
 	case "FAIL", "FAILED":
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "simulated provider rejection"})
 		h.recordEvent(PaymentEvent{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			NodeID:    h.cfg.NodeID,
@@ -326,48 +414,37 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 			Stage:     "PROVIDER_FAILED",
 			Message:   "payment provider rejected the transaction",
 		})
-		return
+		return replication.PaymentResponse{}, http.StatusBadRequest, fmt.Errorf("simulated provider rejection")
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "simulate_outcome must be SUCCESS or FAILED"})
-		return
+		return replication.PaymentResponse{}, http.StatusBadRequest, fmt.Errorf("simulate_outcome must be SUCCESS or FAILED")
 	}
 
-	payment, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID)
+	payment, err := h.ledger.GetPaymentByID(ctx, req.PaymentID)
 	if err == nil {
 		if payment.Status == replication.StatusCommitted.String() {
-			writeJSON(w, http.StatusOK, replication.PaymentResponse{
+			return replication.PaymentResponse{
 				Status:    "OK",
 				PaymentID: req.PaymentID,
 				Message:   "payment already processed",
-			})
-			return
+			}, http.StatusOK, nil
 		}
 		if payment.Status == replication.StatusPending.String() {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"message": "payment is pending — quorum was not reached on previous attempt, please retry",
-			})
-			return
+			return replication.PaymentResponse{}, http.StatusConflict, fmt.Errorf("payment is pending — quorum was not reached on previous attempt, please retry")
 		}
 		if payment.Status == replication.StatusFailed.String() {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"message": "payment is marked failed from previous attempt, retry with a new payment id",
-			})
-			return
+			return replication.PaymentResponse{}, http.StatusConflict, fmt.Errorf("payment is marked failed from previous attempt, retry with a new payment id")
 		}
 	} else if !errors.Is(err, storage.ErrPaymentNotFound) {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
-		return
+		return replication.PaymentResponse{}, http.StatusInternalServerError, fmt.Errorf("failed to check payment id")
 	}
 
 	currentLogHead, err := h.coordinator.CurrentLogHead()
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("failed to assign log index")
 	}
 	nextIndex := currentLogHead + 1
 	if err := h.coordinator.AdvanceLogHead(nextIndex); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("failed to assign log index")
 	}
 
 	entry := replication.LogEntry{
@@ -390,13 +467,12 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.replicator == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "replicator is not configured"})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("replicator is not configured")
 	}
 
-	result, err := h.replicator.ReplicateWithQuorum(r.Context(), entry, followerURLs)
+	result, err := h.replicator.ReplicateWithQuorum(ctx, entry, followerURLs)
 	if err != nil {
-		_ = h.ledger.FailByPaymentID(r.Context(), entry.PaymentID)
+		_ = h.ledger.FailByPaymentID(ctx, entry.PaymentID)
 		h.recordEvent(PaymentEvent{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			NodeID:    h.cfg.NodeID,
@@ -405,15 +481,13 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 			Message:   err.Error(),
 		})
 		if !result.QuorumReached {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
-			return
+			return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("quorum not reached")
 		}
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, err
 	}
 
 	if !result.QuorumReached {
-		_ = h.ledger.FailByPaymentID(r.Context(), entry.PaymentID)
+		_ = h.ledger.FailByPaymentID(ctx, entry.PaymentID)
 		h.recordEvent(PaymentEvent{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			NodeID:    h.cfg.NodeID,
@@ -421,8 +495,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 			Stage:     "QUORUM_NOT_REACHED",
 			Message:   "payment failed because quorum was not reached",
 		})
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
-		return
+		return replication.PaymentResponse{}, http.StatusServiceUnavailable, fmt.Errorf("quorum not reached")
 	}
 
 	h.recordEvent(PaymentEvent{
@@ -433,7 +506,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		Message:   "payment committed successfully",
 	})
 
-	writeJSON(w, http.StatusOK, replication.PaymentResponse{
+	return replication.PaymentResponse{
 		Status:    "OK",
 		PaymentID: entry.PaymentID,
 		LogIndex:  entry.LogIndex,
@@ -446,7 +519,7 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 			AckCount:        result.AckCount,
 			FollowerResults: result.FollowerResults,
 		},
-	})
+	}, http.StatusOK, nil
 }
 
 func (h *handler) eventsHandler(w http.ResponseWriter, r *http.Request) {
@@ -525,4 +598,28 @@ func (h *handler) forwardPayToLeader(w http.ResponseWriter, ctx context.Context,
 		Stage:     stage,
 		Message:   msg,
 	})
+}
+
+func (h *handler) forwardPayToLeaderJSON(ctx context.Context, leaderURL string, receivedBy string, reqBody replication.PaymentRequest) (int, []byte, error) {
+	endpoint := strings.TrimRight(leaderURL, "/") + "/pay"
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(receivedByHeader, receivedBy)
+	resp, err := h.leaderHTTPClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, payload, nil
 }

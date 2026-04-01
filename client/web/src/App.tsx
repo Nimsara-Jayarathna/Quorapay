@@ -254,6 +254,27 @@ function App() {
     }
   }, [selectedNodeUrl]);
 
+  const prioritizedNodeUrls = useMemo(() => {
+    const urls = nodeUrls.filter(Boolean);
+    if (!selectedNodeUrl) {
+      return urls;
+    }
+    return [selectedNodeUrl, ...urls.filter((url) => url !== selectedNodeUrl)];
+  }, [nodeUrls, selectedNodeUrl]);
+
+  async function fetchJsonWithNodeFailover<T>(path: string, init?: RequestInit): Promise<T> {
+    const candidates = prioritizedNodeUrls;
+    let lastError: unknown = new Error("No node URL available");
+    for (const base of candidates) {
+      try {
+        return await fetchJson<T>(`${base}${path}`, init);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
   const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
     if (paymentModalTimeoutRef.current !== null) {
       window.clearTimeout(paymentModalTimeoutRef.current);
@@ -271,7 +292,7 @@ function App() {
     }
   };
 
-  async function submitDistributedPayment(payload: PaymentRequest, selectedURL: string) {
+  async function submitDistributedPayment(payload: PaymentRequest) {
     const requestedPaymentID = payload.payment_id.trim();
     const showPaymentModal = (state: "loading" | "success" | "error" | "info", title: string, message: string) => {
       if (paymentModalTimeoutRef.current !== null) {
@@ -327,7 +348,7 @@ function App() {
     }, 30000);
 
     try {
-      const result = await fetchJson<PaymentResponse>(`${selectedURL}/pay`, {
+      const result = await fetchJsonWithNodeFailover<PaymentResponse>(`/pay`, {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -412,7 +433,7 @@ function App() {
       currency: currency.trim().toUpperCase(),
       simulate_outcome: simulateOutcome,
     };
-    await submitDistributedPayment(payload, selectedNodeUrl);
+    await submitDistributedPayment(payload);
   }
 
   async function handleClientCheckoutSubmit(event: FormEvent<HTMLFormElement>) {
@@ -437,7 +458,7 @@ function App() {
     setPaymentLoading(true);
     setPaymentError(null);
     try {
-      const out = await fetchJson<{ session_id: string; url: string }>(`${selectedNodeUrl}/stripe/create-checkout-session`, {
+      const out = await fetchJsonWithNodeFailover<{ session_id: string; url: string }>(`/stripe/create-checkout-session`, {
         method: "POST",
         body: JSON.stringify({
           payment_id: pid,
@@ -630,25 +651,30 @@ function App() {
     setStripeSessionHandled(sessionID);
     const run = async () => {
       try {
-        const status = await fetchJson<{ payment_status: string; metadata?: Record<string, string> }>(
-          `${selectedNodeUrl}/stripe/session-status?session_id=${encodeURIComponent(sessionID)}`,
+        setPaymentLoading(true);
+        showPaymentModal("loading", "Finalizing Payment", "Stripe paid. Finalizing with current cluster leader...");
+        const result = await fetchJsonWithNodeFailover<PaymentResponse>(`/stripe/finalize-checkout-session`, {
+          method: "POST",
+          body: JSON.stringify({ session_id: sessionID }),
+        });
+        setPaymentResult(result);
+        showPaymentModal(
+          "success",
+          "Payment Accepted",
+          `Stage 6/6: Completed successfully\nPayment ID: ${result.payment_id}\nLeader: ${result.leader_id ?? "-"}\nQuorum: ${result.trace?.ack_count ?? "-"}/${result.trace?.required_quorum ?? "-"}`,
         );
-        if ((status.payment_status || "").toLowerCase() !== "paid") {
-          setPaymentError("Stripe payment is not marked paid.");
-          return;
-        }
-        const parsedAmount = Number(amountParam || amount);
-        const payload: PaymentRequest = {
-          payment_id: pid,
-          amount: parsedAmount,
-          currency: currencyParam || currency.trim().toUpperCase(),
-          simulate_outcome: "SUCCESS",
-        };
-        await submitDistributedPayment(payload, selectedNodeUrl);
+        window.setTimeout(() => setPaymentModalOpen(false), 1800);
+        void refreshStatus();
+        void refreshLedger();
+        void refreshEvents();
         const cleanURL = `${window.location.origin}/client`;
         window.history.replaceState({}, "", cleanURL);
       } catch (error) {
         setPaymentError(getErrorMessage(error));
+        showPaymentModal("error", "Payment Finalization Failed", getErrorMessage(error));
+        window.setTimeout(() => setPaymentModalOpen(false), 1800);
+      } finally {
+        setPaymentLoading(false);
       }
     };
     void run();
