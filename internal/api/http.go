@@ -56,6 +56,7 @@ type MemberDiscovery interface {
 type LedgerStore interface {
 	ListPayments(context.Context) ([]storage.Payment, error)
 	ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
+	ListFinalizedAfter(context.Context, int64) ([]storage.Payment, error)
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
 	FailByPaymentID(context.Context, string) error

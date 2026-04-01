@@ -340,7 +340,7 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 		limit = l
 	}
 
-	items, err := h.ledger.ListCommittedAfter(r.Context(), fromLogIndex)
+	items, err := h.ledger.ListFinalizedAfter(r.Context(), fromLogIndex)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, replication.CatchUpResponse{
 			Success: false,
@@ -351,6 +351,13 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 
 	entries := make([]replication.LogEntry, 0, len(items))
 	for _, p := range items {
+		entryStatus := replication.StatusCommitted
+		switch p.Status {
+		case replication.StatusFailed.String():
+			entryStatus = replication.StatusFailed
+		case replication.StatusCanceled.String():
+			entryStatus = replication.StatusCanceled
+		}
 		entries = append(entries, replication.LogEntry{
 			LogIndex:     p.LogIndex,
 			LeaderID:     p.ProcessedBy,
@@ -358,7 +365,7 @@ func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request)
 			PaymentID:    p.PaymentID,
 			Amount:       p.Amount,
 			Currency:     p.Currency,
-			Status:       replication.StatusCommitted,
+			Status:       entryStatus,
 			PhysicalTime: p.PhysicalTime,
 			LogicalTime:  p.LogicalTime,
 		})

@@ -64,6 +64,19 @@ func (s *stubLedgerStore) ListCommittedAfter(_ context.Context, logIndex int64) 
 	return items, nil
 }
 
+func (s *stubLedgerStore) ListFinalizedAfter(_ context.Context, logIndex int64) ([]storage.Payment, error) {
+	items := make([]storage.Payment, 0, len(s.payments))
+	for _, p := range s.payments {
+		if p.LogIndex <= logIndex {
+			continue
+		}
+		if p.Status == replication.StatusCommitted.String() || p.Status == replication.StatusFailed.String() || p.Status == replication.StatusCanceled.String() {
+			items = append(items, p)
+		}
+	}
+	return items, nil
+}
+
 func (s *stubLedgerStore) CommitByPaymentID(_ context.Context, paymentID string) error {
 	payment, ok := s.payments[paymentID]
 	if !ok {

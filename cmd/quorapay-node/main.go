@@ -122,9 +122,11 @@ func runFollowerCatchUpLoop(
 		MarkRecoveryCatchUpFailed(string)
 	},
 	store interface {
-		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
+		ListFinalizedAfter(context.Context, int64) ([]storage.Payment, error)
 		AppendPending(context.Context, replication.LogEntry) error
 		CommitByPaymentID(context.Context, string) error
+		FailByPaymentID(context.Context, string) error
+		CancelByPaymentID(context.Context, string) error
 	},
 	client *replication.HTTPClient,
 	stopCh <-chan struct{},
@@ -169,6 +171,7 @@ func runFollowerCatchUpLoop(
 
 		applied := 0
 		for _, entry := range resp.Entries {
+			finalStatus := entry.Status
 			entry.Status = replication.StatusPending
 			if strings.TrimSpace(entry.ReceivedBy) == "" {
 				entry.ReceivedBy = entry.LeaderID
@@ -178,9 +181,28 @@ func runFollowerCatchUpLoop(
 				logger.Printf("catch-up append failed payment_id=%s: %v", entry.PaymentID, err)
 				continue
 			}
-			if err := store.CommitByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
-				coord.MarkRecoveryCatchUpFailed(err.Error())
-				logger.Printf("catch-up commit failed payment_id=%s: %v", entry.PaymentID, err)
+			switch finalStatus {
+			case replication.StatusCommitted:
+				if err := store.CommitByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
+					coord.MarkRecoveryCatchUpFailed(err.Error())
+					logger.Printf("catch-up commit failed payment_id=%s: %v", entry.PaymentID, err)
+					continue
+				}
+			case replication.StatusFailed:
+				if err := store.FailByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
+					coord.MarkRecoveryCatchUpFailed(err.Error())
+					logger.Printf("catch-up fail-mark failed payment_id=%s: %v", entry.PaymentID, err)
+					continue
+				}
+			case replication.StatusCanceled:
+				if err := store.CancelByPaymentID(context.Background(), entry.PaymentID); err != nil && !errors.Is(err, storage.ErrPaymentNotFound) {
+					coord.MarkRecoveryCatchUpFailed(err.Error())
+					logger.Printf("catch-up cancel-mark failed payment_id=%s: %v", entry.PaymentID, err)
+					continue
+				}
+			default:
+				coord.MarkRecoveryCatchUpFailed("unsupported catch-up status: " + finalStatus.String())
+				logger.Printf("catch-up unsupported status payment_id=%s status=%s", entry.PaymentID, finalStatus.String())
 				continue
 			}
 			applied++
@@ -194,10 +216,10 @@ func runFollowerCatchUpLoop(
 func readLocalCommittedHead(
 	ctx context.Context,
 	store interface {
-		ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
+		ListFinalizedAfter(context.Context, int64) ([]storage.Payment, error)
 	},
 ) (int64, error) {
-	items, err := store.ListCommittedAfter(ctx, 0)
+	items, err := store.ListFinalizedAfter(ctx, 0)
 	if err != nil {
 		return 0, err
 	}

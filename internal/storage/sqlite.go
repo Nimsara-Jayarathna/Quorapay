@@ -317,6 +317,45 @@ func (s *SQLiteStore) ListCommittedAfter(ctx context.Context, logIndex int64) ([
 	return items, nil
 }
 
+func (s *SQLiteStore) ListFinalizedAfter(ctx context.Context, logIndex int64) ([]Payment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, payment_id, log_index, amount, currency, status, physical_time, logical_time, created_at, received_by, processed_by
+		FROM payments
+		WHERE status IN (?, ?, ?) AND log_index > ?
+		ORDER BY log_index ASC, id ASC
+	`, replication.StatusCommitted.String(), replication.StatusFailed.String(), replication.StatusCanceled.String(), logIndex)
+	if err != nil {
+		return nil, fmt.Errorf("list finalized payments after log index %d: %w", logIndex, err)
+	}
+	defer rows.Close()
+
+	items := make([]Payment, 0)
+	for rows.Next() {
+		var payment Payment
+		if err := rows.Scan(
+			&payment.ID,
+			&payment.PaymentID,
+			&payment.LogIndex,
+			&payment.Amount,
+			&payment.Currency,
+			&payment.Status,
+			&payment.PhysicalTime,
+			&payment.LogicalTime,
+			&payment.CreatedAt,
+			&payment.ReceivedBy,
+			&payment.ProcessedBy,
+		); err != nil {
+			return nil, fmt.Errorf("scan finalized payment row: %w", err)
+		}
+		items = append(items, payment)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate finalized payments: %w", err)
+	}
+	return items, nil
+}
+
 func (s *SQLiteStore) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS payments (
