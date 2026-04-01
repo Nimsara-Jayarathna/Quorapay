@@ -6,6 +6,7 @@ data/
 *.db-shm
 node_modules/
 dist/
+.gocache/
 
 # Env files: keep only *.example in git
 .env

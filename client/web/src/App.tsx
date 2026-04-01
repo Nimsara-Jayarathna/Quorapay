@@ -69,7 +69,7 @@ function resolveRoute(pathname: string): "/admin" | "/client" | "not-found" {
 type ClientPaymentLogItem = {
   id: string;
   amount: string;
-  status: "SUCCESS" | "FAILED";
+  status: "SUCCESS" | "FAILED" | "CANCELED";
   at: string;
   logIndex: number;
 };
@@ -97,6 +97,19 @@ function stageMessageFromEvent(stage: string): string {
     default:
       return "Processing payment across cluster nodes...";
   }
+}
+
+function getProcessStageClasses(stage: string): string {
+  if (stage.includes("FAILED")) {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+  if (stage.includes("CANCELED")) {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (stage.includes("COMMITTED") || stage.includes("SUCCESS") || stage.includes("VERIFIED")) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
 function App() {
@@ -725,7 +738,7 @@ function App() {
   const clientPaymentLogs = useMemo<ClientPaymentLogItem[]>(
     () =>
       ledgerItems
-        .filter((item) => item.status === "COMMITTED" || item.status === "FAILED")
+        .filter((item) => item.status === "COMMITTED" || item.status === "FAILED" || item.status === "CANCELED")
         .slice()
         .sort((a, b) => {
           if (a.log_index !== b.log_index) {
@@ -738,7 +751,10 @@ function App() {
         .map((item) => ({
           id: item.payment_id,
           amount: `${Number(item.amount).toFixed(2)} ${item.currency}`,
-          status: (item.status === "COMMITTED" ? "SUCCESS" : "FAILED") as "SUCCESS" | "FAILED",
+          status: (item.status === "COMMITTED" ? "SUCCESS" : item.status === "FAILED" ? "FAILED" : "CANCELED") as
+            | "SUCCESS"
+            | "FAILED"
+            | "CANCELED",
           at: item.created_at,
           logIndex: item.log_index,
         }))
@@ -886,7 +902,9 @@ function App() {
                                 className={`inline-flex min-w-[78px] justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
                                   item.status === "SUCCESS"
                                     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                    : "border-red-200 bg-red-50 text-red-700"
+                                    : item.status === "FAILED"
+                                      ? "border-red-200 bg-red-50 text-red-700"
+                                      : "border-amber-200 bg-amber-50 text-amber-700"
                                 }`}
                               >
                                 {item.status}
@@ -980,7 +998,11 @@ function App() {
                         eventItems.slice().reverse().map((item, idx) => (
                           <tr key={`${item.timestamp}-${item.stage}-${idx}`}>
                             <td className="px-3 py-2 text-slate-700">{new Date(item.timestamp).toLocaleString()}</td>
-                            <td className="px-3 py-2 text-slate-700">{item.stage}</td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${getProcessStageClasses(item.stage)}`}>
+                                {item.stage}
+                              </span>
+                            </td>
                             <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id ?? "-"}</td>
                             <td className="px-3 py-2 text-slate-700">{item.message}</td>
                           </tr>

@@ -55,7 +55,7 @@ export type LedgerItem = {
   payment_id: string;
   amount: number;
   currency: string;
-  status: "COMMITTED" | "FAILED" | "PENDING" | string;
+  status: "COMMITTED" | "FAILED" | "PENDING" | "CANCELED" | string;
   created_at: string;
   received_by?: string;
   processed_by?: string;
@@ -74,7 +74,7 @@ export type AdminNodeActionResponse = {
   output?: string;
 };
 
-export type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING";
+export type StatusFilter = "ALL" | "COMMITTED" | "FAILED" | "PENDING" | "CANCELED";
 
 export type ClusterNode = {
   node_id: string;

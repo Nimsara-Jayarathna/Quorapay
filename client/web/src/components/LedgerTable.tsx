@@ -9,6 +9,21 @@ type LedgerTableProps = {
   onRefreshLedger: () => void;
 };
 
+function getLedgerStatusClasses(status: string): string {
+  switch (status) {
+    case "COMMITTED":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "FAILED":
+      return "border-red-200 bg-red-50 text-red-700";
+    case "CANCELED":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "PENDING":
+      return "border-slate-200 bg-slate-100 text-slate-700";
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-700";
+  }
+}
+
 function formatDate(isoDate: string): string {
   const date = new Date(isoDate);
   if (Number.isNaN(date.getTime())) {
@@ -31,6 +46,7 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
             <option value="ALL">All</option>
             <option value="COMMITTED">Committed</option>
             <option value="FAILED">Failed</option>
+            <option value="CANCELED">Canceled</option>
             <option value="PENDING">Pending</option>
           </select>
           <button
@@ -83,7 +99,11 @@ function LedgerTable({ statusFilter, onStatusFilterChange, ledgerLoading, ledger
                   <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id}</td>
                   <td className="px-3 py-2 text-slate-700">{item.amount}</td>
                   <td className="px-3 py-2 text-slate-700">{item.currency}</td>
-                  <td className="px-3 py-2 text-slate-700">{item.status}</td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-flex min-w-[92px] justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${getLedgerStatusClasses(item.status)}`}>
+                      {item.status}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-slate-700">{item.received_by ?? "-"}</td>
                   <td className="px-3 py-2 text-slate-700">{item.processed_by ?? "-"}</td>
                   <td className="px-3 py-2 text-slate-700">{formatDate(item.created_at)}</td>
