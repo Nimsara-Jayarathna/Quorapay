@@ -46,6 +46,7 @@ type Coordinator interface {
 
 type Replicator interface {
 	ReplicateWithQuorum(ctx context.Context, entry replication.LogEntry, followerURLs []string) (replication.QuorumReplicationResult, error)
+	ReplicateCancelWithQuorum(ctx context.Context, entry replication.LogEntry, followerURLs []string) (replication.QuorumReplicationResult, error)
 }
 
 type MemberDiscovery interface {
@@ -142,6 +143,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/events", h.eventsHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
+	mux.HandleFunc("/internal/cancel", h.internalCancelHandler)
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
 	mux.HandleFunc("/cluster/nodes", h.clusterNodesHandler)
 	return withCORS(cfg.CORSAllowed, mux)
@@ -335,45 +337,76 @@ func (h *handler) stripeCancelCheckoutSessionHandler(w http.ResponseWriter, r *h
 		reason = "checkout canceled by user"
 	}
 
-	if _, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID); err != nil {
-		if !errors.Is(err, storage.ErrPaymentNotFound) {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
+	existing, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID)
+	if err == nil {
+		if existing.Status == replication.StatusCommitted.String() || existing.Status == replication.StatusFailed.String() {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "payment already finalized; cannot cancel"})
 			return
 		}
-		currentLogHead, err := h.coordinator.CurrentLogHead()
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+		if existing.Status == replication.StatusCanceled.String() {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":     "OK",
+				"payment_id": req.PaymentID,
+				"message":    "cancellation already recorded",
+			})
 			return
 		}
-		nextIndex := currentLogHead + 1
-		if err := h.coordinator.AdvanceLogHead(nextIndex); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
-			return
-		}
-		currency := strings.ToUpper(strings.TrimSpace(req.Currency))
-		if currency == "" {
-			currency = "USD"
-		}
-		if req.Amount < 0 {
-			req.Amount = 0
-		}
-		if err := h.ledger.AppendPending(r.Context(), replication.LogEntry{
-			LogIndex:     nextIndex,
-			Term:         status.Term,
-			LeaderID:     status.NodeID,
-			ReceivedBy:   status.NodeID,
-			PaymentID:    req.PaymentID,
-			Amount:       req.Amount,
-			Currency:     currency,
-			Status:       replication.StatusPending,
-			PhysicalTime: time.Now().UnixNano(),
-			LogicalTime:  int64(h.lamportClock.Send()),
-		}); err != nil && !errors.Is(err, storage.ErrDuplicatePaymentID) {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
-			return
-		}
+	} else if !errors.Is(err, storage.ErrPaymentNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
+		return
 	}
-	_ = h.ledger.CancelByPaymentID(r.Context(), req.PaymentID)
+
+	if h.coordinator == nil || h.replicator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "replication components are not configured"})
+		return
+	}
+
+	currentLogHead, err := h.coordinator.CurrentLogHead()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+		return
+	}
+	nextIndex := currentLogHead + 1
+	if err := h.coordinator.AdvanceLogHead(nextIndex); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+		return
+	}
+
+	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	if req.Amount < 0 {
+		req.Amount = 0
+	}
+
+	entry := replication.LogEntry{
+		LogIndex:     nextIndex,
+		Term:         status.Term,
+		LeaderID:     status.NodeID,
+		ReceivedBy:   status.NodeID,
+		PaymentID:    req.PaymentID,
+		Amount:       req.Amount,
+		Currency:     currency,
+		Status:       replication.StatusPending,
+		PhysicalTime: time.Now().UnixNano(),
+		LogicalTime:  int64(h.lamportClock.Send()),
+	}
+
+	followerURLs, err := h.coordinator.GetFollowerURLs()
+	if err != nil {
+		log.Printf("failed to fetch follower URLs for cancel: %v", err)
+		followerURLs = []string{}
+	}
+	result, err := h.replicator.ReplicateCancelWithQuorum(r.Context(), entry, followerURLs)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	}
+	if !result.QuorumReached {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached for cancellation"})
+		return
+	}
 
 	h.recordEvent(PaymentEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -385,7 +418,12 @@ func (h *handler) stripeCancelCheckoutSessionHandler(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "OK",
 		"payment_id": req.PaymentID,
-		"message":    "cancellation recorded",
+		"message":    "cancellation recorded and replicated",
+		"trace": map[string]any{
+			"required_quorum":  result.RequiredQuorum,
+			"ack_count":        result.AckCount,
+			"follower_results": result.FollowerResults,
+		},
 	})
 }
 

@@ -236,6 +236,52 @@ func (h *handler) internalCommitHandler(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (h *handler) internalCancelHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+
+	var req replication.CancelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, replication.CancelResponse{
+			Success: false,
+			Message: "invalid request body",
+		})
+		return
+	}
+
+	if req.PaymentID == "" {
+		writeJSON(w, http.StatusBadRequest, replication.CancelResponse{
+			Success: false,
+			Message: "payment_id is required",
+		})
+		return
+	}
+
+	err := h.ledger.CancelByPaymentID(r.Context(), req.PaymentID)
+	if err != nil {
+		if errors.Is(err, storage.ErrPaymentNotFound) {
+			writeJSON(w, http.StatusNotFound, replication.CancelResponse{
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusInternalServerError, replication.CancelResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, replication.CancelResponse{
+		Success: true,
+		Message: "cancel applied",
+	})
+}
+
 func (h *handler) internalCatchUpHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})

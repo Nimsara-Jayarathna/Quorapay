@@ -11,10 +11,13 @@ import (
 type stubLocalLedger struct {
 	appendErr    error
 	commitErr    error
+	cancelErr    error
 	lastAppended LogEntry
 	lastCommitID string
+	lastCancelID string
 	appendCalls  int
 	commitCalls  int
+	cancelCalls  int
 }
 
 func (s *stubLocalLedger) AppendPending(_ context.Context, entry LogEntry) error {
@@ -29,16 +32,30 @@ func (s *stubLocalLedger) CommitByPaymentID(_ context.Context, paymentID string)
 	return s.commitErr
 }
 
+func (s *stubLocalLedger) CancelByPaymentID(_ context.Context, paymentID string) error {
+	s.cancelCalls++
+	s.lastCancelID = paymentID
+	return s.cancelErr
+}
+
+func (s *stubLocalLedger) ExistsByPaymentID(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 type stubTransport struct {
 	sync.Mutex
 	appendResults map[string]AppendEntriesResponse
 	appendErrors  map[string]error
 	commitResults map[string]CommitResponse
 	commitErrors  map[string]error
+	cancelResults map[string]CancelResponse
+	cancelErrors  map[string]error
 	appendCalls   int
 	commitCalls   int
+	cancelCalls   int
 	lastRequests  map[string]AppendEntriesRequest
 	lastCommits   map[string]CommitRequest
+	lastCancels   map[string]CancelRequest
 }
 
 func (s *stubTransport) AppendToFollower(_ context.Context, followerBaseURL string, req AppendEntriesRequest) (AppendEntriesResponse, error) {
@@ -79,6 +96,25 @@ func (s *stubTransport) CommitToFollower(_ context.Context, followerBaseURL stri
 	}
 
 	return CommitResponse{Success: false, Message: "no commit response configured"}, nil
+}
+
+func (s *stubTransport) CancelToFollower(_ context.Context, followerBaseURL string, req CancelRequest) (CancelResponse, error) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.cancelCalls++
+	if s.lastCancels == nil {
+		s.lastCancels = make(map[string]CancelRequest)
+	}
+	s.lastCancels[followerBaseURL] = req
+
+	if err, ok := s.cancelErrors[followerBaseURL]; ok {
+		return CancelResponse{}, err
+	}
+	if resp, ok := s.cancelResults[followerBaseURL]; ok {
+		return resp, nil
+	}
+	return CancelResponse{Success: false, Message: "no cancel response configured"}, nil
 }
 
 func baseEntry() LogEntry {

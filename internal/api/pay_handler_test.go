@@ -65,6 +65,11 @@ func (s *stubReplicator) ReplicateWithQuorum(_ context.Context, entry replicatio
 	return s.result, s.err
 }
 
+func (s *stubReplicator) ReplicateCancelWithQuorum(_ context.Context, entry replication.LogEntry, _ []string) (replication.QuorumReplicationResult, error) {
+	s.lastEntry = entry
+	return s.result, s.err
+}
+
 func TestPayHandler_NonLeaderForwardsToLeader(t *testing.T) {
 	leaderClient := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

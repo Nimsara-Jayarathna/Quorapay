@@ -15,6 +15,7 @@ import (
 const (
 	appendPath     = "/internal/append"
 	commitPath     = "/internal/commit"
+	cancelPath     = "/internal/cancel"
 	catchupPath    = "/internal/catchup"
 	defaultTimeout = 5 * time.Second
 )
@@ -79,6 +80,20 @@ func (c *HTTPClient) CatchUpFromLeader(ctx context.Context, leaderBaseURL string
 	if err := c.getJSON(ctx, parsed.String(), &resp); err != nil {
 		return CatchUpResponse{}, fmt.Errorf("catch-up from leader %s: %w", leaderBaseURL, err)
 	}
+	return resp, nil
+}
+
+func (c *HTTPClient) CancelToFollower(ctx context.Context, followerBaseURL string, req CancelRequest) (CancelResponse, error) {
+	var resp CancelResponse
+	endpoint, err := joinFollowerURL(followerBaseURL, cancelPath)
+	if err != nil {
+		return resp, fmt.Errorf("build cancel URL: %w", err)
+	}
+
+	if err := c.postJSON(ctx, endpoint, req, &resp); err != nil {
+		return CancelResponse{}, fmt.Errorf("cancel to follower %s: %w", followerBaseURL, err)
+	}
+
 	return resp, nil
 }
 

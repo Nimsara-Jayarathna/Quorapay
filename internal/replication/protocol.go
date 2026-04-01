@@ -71,6 +71,29 @@ type CommitResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// CancelRequest asks followers to mark an entry canceled.
+type CancelRequest struct {
+	LogIndex  int64  `json:"log_index"`
+	PaymentID string `json:"payment_id"`
+}
+
+// Validate checks cancel request shape.
+func (r CancelRequest) Validate() error {
+	if r.LogIndex < 0 {
+		return fmt.Errorf("log_index cannot be negative")
+	}
+	if r.PaymentID == "" {
+		return fmt.Errorf("payment_id is required")
+	}
+	return nil
+}
+
+// CancelResponse is a follower ACK for cancel.
+type CancelResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
 // CatchUpRequest asks for entries after a known log index.
 type CatchUpRequest struct {
 	FromLogIndex int64 `json:"from_log_index"`
