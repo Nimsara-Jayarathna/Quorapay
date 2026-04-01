@@ -74,6 +74,16 @@ func (s *stubLedgerStore) CommitByPaymentID(_ context.Context, paymentID string)
 	return nil
 }
 
+func (s *stubLedgerStore) FailByPaymentID(_ context.Context, paymentID string) error {
+	payment, ok := s.payments[paymentID]
+	if !ok {
+		return storage.ErrPaymentNotFound
+	}
+	payment.Status = replication.StatusFailed.String()
+	s.payments[paymentID] = payment
+	return nil
+}
+
 func (s *stubLedgerStore) ExistsByPaymentID(_ context.Context, paymentID string) (bool, error) {
 	_, exists := s.payments[paymentID]
 	return exists, nil
@@ -358,7 +368,7 @@ func TestCatchUpHandler_EmptyLedgerReturnsEmptyEntries(t *testing.T) {
 		t.Fatalf("success = false, want true")
 	}
 	if out.Entries == nil || len(out.Entries) != 0 {
-		// Slice len == 0 allows nil slice, which standard json unmarshal converts properly 
+		// Slice len == 0 allows nil slice, which standard json unmarshal converts properly
 		// if we strictly check size. But let's just make sure it's 0.
 		if len(out.Entries) != 0 {
 			t.Fatalf("expected 0 entries, got %d", len(out.Entries))

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"quorapay/internal/coordination"
@@ -51,6 +52,7 @@ type LedgerStore interface {
 	ListCommittedAfter(context.Context, int64) ([]storage.Payment, error)
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
+	FailByPaymentID(context.Context, string) error
 	ExistsByPaymentID(context.Context, string) (bool, error)
 	GetPaymentByID(context.Context, string) (storage.Payment, error)
 }
@@ -69,6 +71,16 @@ type handler struct {
 	skewReject       time.Duration
 	maxMessageAge    time.Duration
 	maxFutureDrift   time.Duration
+	eventsMu         sync.RWMutex
+	events           []PaymentEvent
+}
+
+type PaymentEvent struct {
+	Timestamp string `json:"timestamp"`
+	NodeID    string `json:"node_id"`
+	PaymentID string `json:"payment_id,omitempty"`
+	Stage     string `json:"stage"`
+	Message   string `json:"message"`
 }
 
 func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Status }, ledger LedgerStore, replicator ...Replicator) http.Handler {
@@ -112,6 +124,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/status", h.statusHandler)
 	mux.HandleFunc("/ledger", h.ledgerHandler)
 	mux.HandleFunc("/pay", h.payHandler)
+	mux.HandleFunc("/events", h.eventsHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
 	mux.HandleFunc("/internal/catchup", h.internalCatchUpHandler)
@@ -162,8 +175,20 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	if receivedBy == "" {
 		receivedBy = h.cfg.NodeID
 	}
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		Stage:     "RECEIVED",
+		Message:   "payment request received",
+	})
 	if status.Role != coordination.RoleLeader {
 		if status.LeaderURL != "" {
+			h.recordEvent(PaymentEvent{
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				NodeID:    h.cfg.NodeID,
+				Stage:     "FORWARDED_TO_LEADER",
+				Message:   "request forwarded to leader",
+			})
 			h.forwardPayToLeader(w, r, status.LeaderURL, receivedBy)
 			return
 		}
@@ -180,6 +205,31 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		PaymentID: req.PaymentID,
+		Stage:     "LEADER_PROCESSING",
+		Message:   "leader started payment processing",
+	})
+
+	// Optional simulation toggle for demoing successful and failed transactions from UI.
+	switch strings.ToUpper(strings.TrimSpace(req.SimulateOutcome)) {
+	case "", "SUCCESS":
+	case "FAIL", "FAILED":
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "simulated provider rejection"})
+		h.recordEvent(PaymentEvent{
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			NodeID:    h.cfg.NodeID,
+			PaymentID: req.PaymentID,
+			Stage:     "PROVIDER_FAILED",
+			Message:   "payment provider rejected the transaction",
+		})
+		return
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "simulate_outcome must be SUCCESS or FAILED"})
+		return
+	}
 
 	payment, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID)
 	if err == nil {
@@ -194,6 +244,12 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		if payment.Status == replication.StatusPending.String() {
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"message": "payment is pending — quorum was not reached on previous attempt, please retry",
+			})
+			return
+		}
+		if payment.Status == replication.StatusFailed.String() {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"message": "payment is marked failed from previous attempt, retry with a new payment id",
 			})
 			return
 		}
@@ -239,6 +295,14 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.replicator.ReplicateWithQuorum(r.Context(), entry, followerURLs)
 	if err != nil {
+		_ = h.ledger.FailByPaymentID(r.Context(), entry.PaymentID)
+		h.recordEvent(PaymentEvent{
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			NodeID:    h.cfg.NodeID,
+			PaymentID: entry.PaymentID,
+			Stage:     "REPLICATION_FAILED",
+			Message:   err.Error(),
+		})
 		if !result.QuorumReached {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
 			return
@@ -248,9 +312,25 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !result.QuorumReached {
+		_ = h.ledger.FailByPaymentID(r.Context(), entry.PaymentID)
+		h.recordEvent(PaymentEvent{
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			NodeID:    h.cfg.NodeID,
+			PaymentID: entry.PaymentID,
+			Stage:     "QUORUM_NOT_REACHED",
+			Message:   "payment failed because quorum was not reached",
+		})
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "quorum not reached"})
 		return
 	}
+
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		PaymentID: entry.PaymentID,
+		Stage:     "COMMITTED",
+		Message:   "payment committed successfully",
+	})
 
 	writeJSON(w, http.StatusOK, replication.PaymentResponse{
 		Status:    "OK",
@@ -258,7 +338,44 @@ func (h *handler) payHandler(w http.ResponseWriter, r *http.Request) {
 		LogIndex:  entry.LogIndex,
 		Term:      entry.Term,
 		LeaderID:  entry.LeaderID,
+		Trace: &replication.PaymentTrace{
+			ReceivedBy:      receivedBy,
+			RoutedToLeader:  receivedBy != entry.LeaderID,
+			RequiredQuorum:  result.RequiredQuorum,
+			AckCount:        result.AckCount,
+			FollowerResults: result.FollowerResults,
+		},
 	})
+}
+
+func (h *handler) eventsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	paymentID := strings.TrimSpace(r.URL.Query().Get("payment_id"))
+
+	h.eventsMu.RLock()
+	defer h.eventsMu.RUnlock()
+	items := make([]PaymentEvent, 0, len(h.events))
+	for _, event := range h.events {
+		if paymentID == "" || event.PaymentID == paymentID {
+			items = append(items, event)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count": len(items),
+		"items": items,
+	})
+}
+
+func (h *handler) recordEvent(event PaymentEvent) {
+	h.eventsMu.Lock()
+	defer h.eventsMu.Unlock()
+	h.events = append(h.events, event)
+	if len(h.events) > 250 {
+		h.events = h.events[len(h.events)-250:]
+	}
 }
 
 func (h *handler) forwardPayToLeader(w http.ResponseWriter, r *http.Request, leaderURL string, receivedBy string) {

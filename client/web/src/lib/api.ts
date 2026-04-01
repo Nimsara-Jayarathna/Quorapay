@@ -20,16 +20,33 @@ export type PaymentRequest = {
   payment_id: string;
   amount: number;
   currency: string;
-  note?: string;
+  simulate_outcome?: "SUCCESS" | "FAILED";
+};
+
+export type FollowerResult = {
+  follower_base_url: string;
+  append_acknowledged: boolean;
+  commit_acknowledged: boolean;
+  error?: string;
+};
+
+export type PaymentTrace = {
+  received_by?: string;
+  routed_to_leader: boolean;
+  required_quorum?: number;
+  ack_count?: number;
+  follower_results?: FollowerResult[];
 };
 
 export type PaymentResponse = {
   payment_id: string;
-  accepted: boolean;
-  status: "PENDING" | "COMMITTED" | "FAILED" | string;
-  message: string;
+  status: "OK" | string;
+  message?: string;
+  log_index?: number;
+  term?: number;
+  leader_id?: string;
   leader_url?: string;
-  record?: Record<string, unknown>;
+  trace?: PaymentTrace;
 };
 
 export type LedgerItem = {
@@ -67,6 +84,19 @@ export type ClusterNode = {
 export type ClusterNodesResponse = {
   count: number;
   items: ClusterNode[];
+};
+
+export type PaymentEvent = {
+  timestamp: string;
+  node_id: string;
+  payment_id?: string;
+  stage: string;
+  message: string;
+};
+
+export type PaymentEventsResponse = {
+  count: number;
+  items: PaymentEvent[];
 };
 
 export function getErrorMessage(error: unknown): string {

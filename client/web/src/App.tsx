@@ -15,6 +15,7 @@ import {
   getErrorMessage,
   LedgerResponse,
   NodeStatus,
+  PaymentEventsResponse,
   PaymentRequest,
   PaymentResponse,
   StatusFilter,
@@ -53,6 +54,8 @@ function generatePaymentId(): string {
 }
 
 function App() {
+  const [route, setRoute] = useState<string>(() => (window.location.pathname.startsWith("/client") ? "/client" : "/admin"));
+
   const [nodeUrls, setNodeUrls] = useState<string[]>(initialNodeUrls);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(defaultNodeIndex);
   const selectedNodeUrl = nodeUrls[selectedNodeIndex] ?? "";
@@ -66,6 +69,7 @@ function App() {
   const [paymentId, setPaymentId] = useState(generatePaymentId());
   const [amount, setAmount] = useState("10.00");
   const [currency, setCurrency] = useState("USD");
+  const [simulateOutcome, setSimulateOutcome] = useState<"SUCCESS" | "FAILED">("SUCCESS");
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentResult, setPaymentResult] = useState<PaymentResponse | null>(null);
@@ -79,6 +83,8 @@ function App() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [eventItems, setEventItems] = useState<Array<{ timestamp: string; stage: string; message: string; payment_id?: string }>>([]);
+  const [eventsError, setEventsError] = useState<string | null>(null);
 
   const [shutdownLoading, setShutdownLoading] = useState(false);
   const [shutdownMessage, setShutdownMessage] = useState<string | null>(null);
@@ -183,6 +189,20 @@ function App() {
     }
   }, [selectedNodeUrl]);
 
+  const refreshEvents = useCallback(async () => {
+    if (!selectedNodeUrl) {
+      return;
+    }
+    try {
+      const result = await fetchJson<PaymentEventsResponse>(`${selectedNodeUrl}/events`);
+      setEventItems(result.items ?? []);
+      setEventsError(null);
+    } catch (error) {
+      setEventItems([]);
+      setEventsError(getErrorMessage(error));
+    }
+  }, [selectedNodeUrl]);
+
   async function handleSubmitPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -234,40 +254,46 @@ function App() {
       payment_id: paymentId.trim(),
       amount: numericAmount,
       currency: currency.trim().toUpperCase(),
+      simulate_outcome: simulateOutcome,
     };
 
     setPaymentLoading(true);
     setPaymentError(null);
-    showPaymentModal("loading", "Processing Payment", "Submitting payment to cluster...");
+    showPaymentModal("loading", "Processing Payment", "Stage 1/4: Received by selected node...");
 
     try {
+      showPaymentModal("loading", "Processing Payment", "Stage 2/4: Leader election and routing check...");
       const result = await fetchJson<PaymentResponse>(`${selectedNodeUrl}/pay`, {
         method: "POST",
         body: JSON.stringify(payload),
       });
       setPaymentResult(result);
-      const responseMessage = `${result.status}: ${result.message ?? "Request completed successfully."}`;
-      if ((result.message ?? "").toLowerCase().includes("already processed")) {
-        showPaymentModal("info", "Payment Already Processed", responseMessage);
-      } else {
-        showPaymentModal("success", "Payment Accepted", responseMessage);
-      }
+      const trace = result.trace;
+      const summary = [
+        `Stage 4/4: Completed successfully`,
+        `Payment ID: ${result.payment_id}`,
+        `Leader: ${result.leader_id ?? "-"}`,
+        `Routed To Leader: ${trace?.routed_to_leader ? "Yes" : "No"}`,
+        `Quorum: ${trace?.ack_count ?? "-"}/${trace?.required_quorum ?? "-"}`,
+      ].join("\n");
+      showPaymentModal("success", "Payment Accepted", summary);
       void refreshStatus();
       void refreshLedger();
+      void refreshEvents();
     } catch (error) {
       setPaymentResult(null);
       const message = getErrorMessage(error);
       setPaymentError(message);
-      showPaymentModal("error", "Payment Failed", message);
+      showPaymentModal("error", "Payment Failed", `Stage 4/4: Failed\n${message}`);
+      void refreshStatus();
+      void refreshLedger();
+      void refreshEvents();
     } finally {
       setPaymentLoading(false);
     }
   }
 
-  const selectedNodeId =
-    status?.node_id ||
-    nodeMetaByUrl[selectedNodeUrl]?.nodeId ||
-    "";
+  const selectedNodeId = status?.node_id || nodeMetaByUrl[selectedNodeUrl]?.nodeId || "";
 
   const knownNodeIds = useMemo(
     () =>
@@ -387,15 +413,17 @@ function App() {
   useEffect(() => {
     void refreshStatus();
     void refreshLedger();
-  }, [refreshStatus, refreshLedger]);
+    void refreshEvents();
+  }, [refreshStatus, refreshLedger, refreshEvents]);
 
   useEffect(() => {
     void refreshNodeMeta();
     const intervalId = window.setInterval(() => {
       void refreshNodeMeta();
+      void refreshEvents();
     }, 5000);
     return () => window.clearInterval(intervalId);
-  }, [refreshNodeMeta]);
+  }, [refreshNodeMeta, refreshEvents]);
 
   useEffect(() => {
     void refreshTopology();
@@ -410,6 +438,14 @@ function App() {
       setSelectedNodeIndex(0);
     }
   }, [nodeUrls, selectedNodeIndex]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setRoute(window.location.pathname.startsWith("/client") ? "/client" : "/admin");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(
     () => () => {
@@ -426,14 +462,16 @@ function App() {
     [],
   );
 
+  const navigate = (target: "/admin" | "/client") => {
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, "", target);
+      setRoute(target);
+    }
+  };
+
   return (
     <div className="relative">
-      <PaymentActionModal
-        open={paymentModalOpen}
-        state={paymentModalState}
-        title={paymentModalTitle}
-        message={paymentModalMessage}
-      />
+      <PaymentActionModal open={paymentModalOpen} state={paymentModalState} title={paymentModalTitle} message={paymentModalMessage} />
       <NodeManagementModal
         open={nodeManagementOpen}
         action={nodeManagementAction}
@@ -450,30 +488,42 @@ function App() {
         }}
         onConfirm={() => void handleNodeAction(nodeManagementAction, nodeManagementTargetNodeId)}
       />
-      <NodeActionModal
-        open={nodeActionModalOpen}
-        state={nodeActionModalState}
-        title={nodeActionModalTitle}
-        message={nodeActionModalMessage}
-      />
+      <NodeActionModal open={nodeActionModalOpen} state={nodeActionModalState} title={nodeActionModalTitle} message={nodeActionModalMessage} />
       <NoNodesConnectedModal
         open={noNodesConnected}
         onRetry={() => {
           void refreshTopology();
           void refreshNodeMeta();
           void refreshStatus();
+          void refreshEvents();
         }}
       />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <header className="mb-6">
-          <h1 className="text-2xl font-semibold text-slate-900">Quorapay Web Client</h1>
-          <p className="mt-1 text-sm text-slate-600">Submit payments, inspect node status, and view replicated ledger data.</p>
+        <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">Quorapay Prototype</h1>
+            <p className="mt-1 text-sm text-slate-600">Distributed payment simulation with selected-node perspective and process logs.</p>
+          </div>
+          <div className="inline-flex rounded-md border border-slate-300 bg-white p-1">
+            <button
+              type="button"
+              className={`rounded px-3 py-1.5 text-sm font-medium ${route === "/admin" ? "bg-slate-900 text-white" : "text-slate-700"}`}
+              onClick={() => navigate("/admin")}
+            >
+              Admin UI
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1.5 text-sm font-medium ${route === "/client" ? "bg-slate-900 text-white" : "text-slate-700"}`}
+              onClick={() => navigate("/client")}
+            >
+              Client UI
+            </button>
+          </div>
         </header>
 
-        {statusError ? (
-          <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div>
-        ) : null}
+        {statusError ? <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{statusError}</div> : null}
 
         <div className="space-y-6">
           <NodeTabs
@@ -484,33 +534,72 @@ function App() {
             onOpenNodeManagement={openNodeManagement}
           />
 
-          <div className="grid items-stretch gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-7">
-              <NodeStatusPanel
-                status={status}
-                statusLoading={statusLoading}
-                nodeActionLoading={shutdownLoading}
-                shutdownMessage={shutdownMessage}
-                selectedNodeId={selectedNodeId}
-                onRefreshStatus={() => void refreshStatus()}
-                onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
-              />
+          {route === "/client" ? (
+            <div className="grid gap-6 xl:grid-cols-12">
+              <div className="xl:col-span-7">
+                <PaymentForm
+                  paymentId={paymentId}
+                  amount={amount}
+                  currency={currency}
+                  simulateOutcome={simulateOutcome}
+                  paymentLoading={paymentLoading}
+                  onPaymentIdChange={setPaymentId}
+                  onAmountChange={setAmount}
+                  onCurrencyChange={setCurrency}
+                  onSimulateOutcomeChange={setSimulateOutcome}
+                  onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
+                  onSubmit={handleSubmitPayment}
+                />
+                {paymentError ? <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{paymentError}</div> : null}
+                {paymentResult ? (
+                  <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    Payment {paymentResult.payment_id} processed by leader {paymentResult.leader_id ?? "-"}, quorum {paymentResult.trace?.ack_count ?? "-"}/{paymentResult.trace?.required_quorum ?? "-"}.
+                  </div>
+                ) : null}
+              </div>
+              <div className="xl:col-span-5">
+                <NodeStatusPanel
+                  status={status}
+                  statusLoading={statusLoading}
+                  nodeActionLoading={shutdownLoading}
+                  shutdownMessage={shutdownMessage}
+                  selectedNodeId={selectedNodeId}
+                  onRefreshStatus={() => void refreshStatus()}
+                  onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
+                />
+              </div>
             </div>
+          ) : (
+            <div className="grid items-stretch gap-6 xl:grid-cols-12">
+              <div className="xl:col-span-7">
+                <NodeStatusPanel
+                  status={status}
+                  statusLoading={statusLoading}
+                  nodeActionLoading={shutdownLoading}
+                  shutdownMessage={shutdownMessage}
+                  selectedNodeId={selectedNodeId}
+                  onRefreshStatus={() => void refreshStatus()}
+                  onNodeAction={(action, nodeId) => void handleNodeAction(action, nodeId)}
+                />
+              </div>
 
-            <div className="xl:col-span-5">
-              <PaymentForm
-                paymentId={paymentId}
-                amount={amount}
-                currency={currency}
-                paymentLoading={paymentLoading}
-                onPaymentIdChange={setPaymentId}
-                onAmountChange={setAmount}
-                onCurrencyChange={setCurrency}
-                onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
-                onSubmit={handleSubmitPayment}
-              />
+              <div className="xl:col-span-5">
+                <PaymentForm
+                  paymentId={paymentId}
+                  amount={amount}
+                  currency={currency}
+                  simulateOutcome={simulateOutcome}
+                  paymentLoading={paymentLoading}
+                  onPaymentIdChange={setPaymentId}
+                  onAmountChange={setAmount}
+                  onCurrencyChange={setCurrency}
+                  onSimulateOutcomeChange={setSimulateOutcome}
+                  onGeneratePaymentId={() => setPaymentId(generatePaymentId())}
+                  onSubmit={handleSubmitPayment}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <LedgerTable
             statusFilter={statusFilter}
@@ -520,6 +609,50 @@ function App() {
             items={filteredLedgerItems}
             onRefreshLedger={() => void refreshLedger()}
           />
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-lg font-medium text-slate-900">Payment Process Logs (Selected Node)</h2>
+              <button
+                type="button"
+                onClick={() => void refreshEvents()}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                Refresh Logs
+              </button>
+            </div>
+            {eventsError ? <div className="mb-2 text-sm text-red-700">Log error: {eventsError}</div> : null}
+            <div className="max-h-72 overflow-auto rounded-md border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">Timestamp</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">Stage</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">Payment</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">Message</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {eventItems.length === 0 ? (
+                    <tr>
+                      <td className="px-3 py-4 text-slate-500" colSpan={4}>
+                        No process logs.
+                      </td>
+                    </tr>
+                  ) : (
+                    eventItems.slice().reverse().map((item, idx) => (
+                      <tr key={`${item.timestamp}-${item.stage}-${idx}`}>
+                        <td className="px-3 py-2 text-slate-700">{new Date(item.timestamp).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-slate-700">{item.stage}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-slate-700">{item.payment_id ?? "-"}</td>
+                        <td className="px-3 py-2 text-slate-700">{item.message}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </div>
     </div>

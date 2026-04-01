@@ -41,7 +41,7 @@ function PaymentActionModal({ open, state, title, message }: PaymentActionModalP
           </div>
         </div>
 
-        <p className={`rounded-lg border px-3 py-3 text-sm leading-6 ${toneClass}`}>{message}</p>
+        <p className={`whitespace-pre-line rounded-lg border px-3 py-3 text-sm leading-6 ${toneClass}`}>{message}</p>
 
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 text-sm text-slate-600">

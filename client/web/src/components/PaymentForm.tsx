@@ -4,10 +4,12 @@ type PaymentFormProps = {
   paymentId: string;
   amount: string;
   currency: string;
+  simulateOutcome: "SUCCESS" | "FAILED";
   paymentLoading: boolean;
   onPaymentIdChange: (value: string) => void;
   onAmountChange: (value: string) => void;
   onCurrencyChange: (value: string) => void;
+  onSimulateOutcomeChange: (value: "SUCCESS" | "FAILED") => void;
   onGeneratePaymentId: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
@@ -16,10 +18,12 @@ function PaymentForm({
   paymentId,
   amount,
   currency,
+  simulateOutcome,
   paymentLoading,
   onPaymentIdChange,
   onAmountChange,
   onCurrencyChange,
+  onSimulateOutcomeChange,
   onGeneratePaymentId,
   onSubmit,
 }: PaymentFormProps) {
@@ -82,6 +86,21 @@ function PaymentForm({
             className="rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-400 focus:outline-none"
             placeholder="USD"
           />
+        </div>
+
+        <div className="grid gap-2">
+          <label htmlFor="simulate-outcome" className="text-sm font-medium text-slate-700">
+            Simulation Outcome
+          </label>
+          <select
+            id="simulate-outcome"
+            value={simulateOutcome}
+            onChange={(event) => onSimulateOutcomeChange(event.target.value as "SUCCESS" | "FAILED")}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          >
+            <option value="SUCCESS">Success</option>
+            <option value="FAILED">Failed</option>
+          </select>
         </div>
 
         <div className="flex justify-center">

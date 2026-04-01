@@ -87,9 +87,10 @@ func (e LogEntry) IsZero() bool {
 
 // PaymentRequest is the public input for POST /pay.
 type PaymentRequest struct {
-	PaymentID string  `json:"payment_id"`
-	Amount    float64 `json:"amount"`
-	Currency  string  `json:"currency"`
+	PaymentID       string  `json:"payment_id"`
+	Amount          float64 `json:"amount"`
+	Currency        string  `json:"currency"`
+	SimulateOutcome string  `json:"simulate_outcome,omitempty"`
 }
 
 // Validate checks payment request shape.
@@ -117,7 +118,16 @@ type PaymentResponse struct {
 	LeaderID  string `json:"leader_id,omitempty"`
 	LeaderURL string `json:"leader_url,omitempty"`
 
-	Message string `json:"message,omitempty"`
+	Message string        `json:"message,omitempty"`
+	Trace   *PaymentTrace `json:"trace,omitempty"`
+}
+
+type PaymentTrace struct {
+	ReceivedBy      string                      `json:"received_by,omitempty"`
+	RoutedToLeader  bool                        `json:"routed_to_leader"`
+	RequiredQuorum  int                         `json:"required_quorum,omitempty"`
+	AckCount        int                         `json:"ack_count,omitempty"`
+	FollowerResults []FollowerReplicationResult `json:"follower_results,omitempty"`
 }
 
 // ReplicationResult is a small quorum summary.
