@@ -48,6 +48,7 @@ func main() {
 	mux.HandleFunc("/health", gw.health)
 	mux.HandleFunc("/payments/checkout-session", gw.checkoutSession)
 	mux.HandleFunc("/payments/finalize", gw.finalizeSession)
+	mux.HandleFunc("/payments/cancel", gw.cancelSession)
 	server := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
 		Handler:           withCORS(cfg.CORSAllowed, mux),
@@ -108,6 +109,24 @@ func (g *gateway) finalizeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, payload, err := g.forwardToLeader(r.Context(), "/stripe/finalize-checkout-session", body)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	}
+	writeRawJSON(w, status, payload)
+}
+
+func (g *gateway) cancelSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	status, payload, err := g.forwardToLeader(r.Context(), "/stripe/cancel-checkout-session", body)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
 		return

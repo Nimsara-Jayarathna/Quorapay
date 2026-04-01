@@ -9,12 +9,13 @@ const (
 	StatusPending   Status = "PENDING"
 	StatusCommitted Status = "COMMITTED"
 	StatusFailed    Status = "FAILED"
+	StatusCanceled  Status = "CANCELED"
 )
 
 // IsValid reports whether the status is supported.
 func (s Status) IsValid() bool {
 	switch s {
-	case StatusPending, StatusCommitted, StatusFailed:
+	case StatusPending, StatusCommitted, StatusFailed, StatusCanceled:
 		return true
 	default:
 		return false

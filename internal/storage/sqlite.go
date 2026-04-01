@@ -207,6 +207,35 @@ func (s *SQLiteStore) FailByPaymentID(ctx context.Context, paymentID string) err
 	return fmt.Errorf("fail payment %s: current status is %s", paymentID, payment.Status)
 }
 
+func (s *SQLiteStore) CancelByPaymentID(ctx context.Context, paymentID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE payments
+		SET status = ?
+		WHERE payment_id = ? AND status = ?
+	`, replication.StatusCanceled.String(), paymentID, replication.StatusPending.String())
+	if err != nil {
+		return fmt.Errorf("cancel payment %s: %w", paymentID, err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read cancel result for payment %s: %w", paymentID, err)
+	}
+	if rowsAffected > 0 {
+		return nil
+	}
+
+	payment, err := s.GetPaymentByID(ctx, paymentID)
+	if err != nil {
+		return err
+	}
+	if payment.Status == replication.StatusCanceled.String() {
+		return nil
+	}
+
+	return fmt.Errorf("cancel payment %s: current status is %s", paymentID, payment.Status)
+}
+
 func (s *SQLiteStore) GetPaymentByID(ctx context.Context, paymentID string) (Payment, error) {
 	var payment Payment
 	err := s.db.QueryRowContext(ctx, `

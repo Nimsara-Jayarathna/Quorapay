@@ -58,6 +58,7 @@ type LedgerStore interface {
 	AppendPending(context.Context, replication.LogEntry) error
 	CommitByPaymentID(context.Context, string) error
 	FailByPaymentID(context.Context, string) error
+	CancelByPaymentID(context.Context, string) error
 	ExistsByPaymentID(context.Context, string) (bool, error)
 	GetPaymentByID(context.Context, string) (storage.Payment, error)
 }
@@ -137,6 +138,7 @@ func NewHandler(cfg Config, status interface{ CurrentStatus() coordination.Statu
 	mux.HandleFunc("/stripe/create-checkout-session", h.stripeCreateCheckoutSessionHandler)
 	mux.HandleFunc("/stripe/session-status", h.stripeSessionStatusHandler)
 	mux.HandleFunc("/stripe/finalize-checkout-session", h.stripeFinalizeCheckoutSessionHandler)
+	mux.HandleFunc("/stripe/cancel-checkout-session", h.stripeCancelCheckoutSessionHandler)
 	mux.HandleFunc("/events", h.eventsHandler)
 	mux.HandleFunc("/internal/append", h.internalAppendHandler)
 	mux.HandleFunc("/internal/commit", h.internalCommitHandler)
@@ -241,6 +243,13 @@ type stripeFinalizeCheckoutSessionRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+type stripeCancelCheckoutSessionRequest struct {
+	PaymentID string  `json:"payment_id"`
+	Reason    string  `json:"reason,omitempty"`
+	Amount    float64 `json:"amount,omitempty"`
+	Currency  string  `json:"currency,omitempty"`
+}
+
 func (h *handler) stripeFinalizeCheckoutSessionHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
@@ -290,6 +299,122 @@ func (h *handler) stripeFinalizeCheckoutSessionHandler(w http.ResponseWriter, r 
 		return
 	}
 	writeJSON(w, code, resp)
+}
+
+func (h *handler) stripeCancelCheckoutSessionHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var req stripeCancelCheckoutSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.PaymentID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "payment_id is required"})
+		return
+	}
+	status := h.coordinator.CurrentStatus()
+	if status.Role != coordination.RoleLeader {
+		if status.LeaderURL == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "no leader available"})
+			return
+		}
+		code, payload, err := h.forwardJSON(r.Context(), strings.TrimRight(status.LeaderURL, "/")+"/stripe/cancel-checkout-session", req)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+			return
+		}
+		writeRawJSON(w, code, payload)
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "checkout canceled by user"
+	}
+
+	if _, err := h.ledger.GetPaymentByID(r.Context(), req.PaymentID); err != nil {
+		if !errors.Is(err, storage.ErrPaymentNotFound) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to check payment id"})
+			return
+		}
+		currentLogHead, err := h.coordinator.CurrentLogHead()
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+			return
+		}
+		nextIndex := currentLogHead + 1
+		if err := h.coordinator.AdvanceLogHead(nextIndex); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "failed to assign log index"})
+			return
+		}
+		currency := strings.ToUpper(strings.TrimSpace(req.Currency))
+		if currency == "" {
+			currency = "USD"
+		}
+		if req.Amount < 0 {
+			req.Amount = 0
+		}
+		if err := h.ledger.AppendPending(r.Context(), replication.LogEntry{
+			LogIndex:     nextIndex,
+			Term:         status.Term,
+			LeaderID:     status.NodeID,
+			ReceivedBy:   status.NodeID,
+			PaymentID:    req.PaymentID,
+			Amount:       req.Amount,
+			Currency:     currency,
+			Status:       replication.StatusPending,
+			PhysicalTime: time.Now().UnixNano(),
+			LogicalTime:  int64(h.lamportClock.Send()),
+		}); err != nil && !errors.Is(err, storage.ErrDuplicatePaymentID) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
+	}
+	_ = h.ledger.CancelByPaymentID(r.Context(), req.PaymentID)
+
+	h.recordEvent(PaymentEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		NodeID:    h.cfg.NodeID,
+		PaymentID: req.PaymentID,
+		Stage:     "STRIPE_CHECKOUT_CANCELED",
+		Message:   reason,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "OK",
+		"payment_id": req.PaymentID,
+		"message":    "cancellation recorded",
+	})
+}
+
+func writeRawJSON(w http.ResponseWriter, status int, payload []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(payload)
+}
+
+func (h *handler) forwardJSON(ctx context.Context, endpoint string, body any) (int, []byte, error) {
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.leaderHTTPClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, payload, nil
 }
 
 func (h *handler) clusterNodesHandler(w http.ResponseWriter, r *http.Request) {

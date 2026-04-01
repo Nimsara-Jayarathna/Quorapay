@@ -84,6 +84,16 @@ func (s *stubLedgerStore) FailByPaymentID(_ context.Context, paymentID string) e
 	return nil
 }
 
+func (s *stubLedgerStore) CancelByPaymentID(_ context.Context, paymentID string) error {
+	payment, ok := s.payments[paymentID]
+	if !ok {
+		return storage.ErrPaymentNotFound
+	}
+	payment.Status = replication.StatusCanceled.String()
+	s.payments[paymentID] = payment
+	return nil
+}
+
 func (s *stubLedgerStore) ExistsByPaymentID(_ context.Context, paymentID string) (bool, error) {
 	_, exists := s.payments[paymentID]
 	return exists, nil

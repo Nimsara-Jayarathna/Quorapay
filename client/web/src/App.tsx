@@ -646,7 +646,29 @@ function App() {
     const currencyParam = (params.get("currency") || "").trim().toUpperCase();
 
     if (stripeState === "cancel") {
-      setPaymentError("Stripe checkout was canceled.");
+      const cancelledID = (params.get("payment_id") || "").trim();
+      if (cancelledID) {
+        void fetchJsonViaGateway(`/payments/cancel`, {
+          method: "POST",
+          body: JSON.stringify({
+            payment_id: cancelledID,
+            reason: "stripe checkout canceled by user",
+            amount: Number(amount),
+            currency: currency.trim().toUpperCase(),
+          }),
+        }).catch(() => {
+          // Cancellation linkage is best-effort.
+        });
+      }
+      setPaymentError(null);
+      showPaymentModal(
+        "info",
+        "Payment Canceled",
+        `Stripe checkout was canceled.\nPayment ID: ${cancelledID || "N/A"}`,
+      );
+      window.setTimeout(() => setPaymentModalOpen(false), 1800);
+      const cleanURL = `${window.location.origin}/client`;
+      window.history.replaceState({}, "", cleanURL);
       return;
     }
     if (stripeState !== "success" || sessionID === "" || pid === "" || sessionID === stripeSessionHandled) {
