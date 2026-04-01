@@ -5,9 +5,11 @@ type PaymentActionModalProps = {
   state: "loading" | "success" | "error" | "info";
   title: string;
   message: string;
+  canClose: boolean;
+  onClose: () => void;
 };
 
-function PaymentActionModal({ open, state, title, message }: PaymentActionModalProps) {
+function PaymentActionModal({ open, state, title, message, canClose, onClose }: PaymentActionModalProps) {
   const isLoading = state === "loading";
   const isSuccess = state === "success";
   const isError = state === "error";
@@ -50,6 +52,17 @@ function PaymentActionModal({ open, state, title, message }: PaymentActionModalP
           </div>
         ) : null}
 
+        {canClose ? (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Close
+            </button>
+          </div>
+        ) : null}
       </div>
     </BlockingModal>
   );

@@ -100,6 +100,12 @@ export type PaymentEventsResponse = {
 };
 
 export function getErrorMessage(error: unknown): string {
+  if (error instanceof TypeError) {
+    const message = String(error.message || "").toLowerCase();
+    if (message.includes("failed to fetch") || message.includes("networkerror")) {
+      return "Cannot reach payment gateway. Ensure gateway is running on VITE_GATEWAY_API_BASE_URL and try again.";
+    }
+  }
   if (error instanceof Error) {
     return error.message;
   }

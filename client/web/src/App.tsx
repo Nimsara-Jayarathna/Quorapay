@@ -45,6 +45,7 @@ const blockingModalTimeoutMS =
   Number.isInteger(configuredBlockingModalTimeoutMS) && configuredBlockingModalTimeoutMS >= 0
     ? configuredBlockingModalTimeoutMS
     : 3000;
+const paymentModalManualCloseEnabled = String(import.meta.env.VITE_PAYMENT_MODAL_MANUAL_CLOSE_ENABLED ?? "true").toLowerCase() !== "false";
 const adminApiBaseUrl = (import.meta.env.VITE_ADMIN_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8090";
 const gatewayApiBaseUrl = (import.meta.env.VITE_GATEWAY_API_BASE_URL as string | undefined)?.trim() || "http://localhost:18100";
 const clientCurrencyOptions = ["USD", "EUR", "GBP", "LKR"];
@@ -302,13 +303,21 @@ function App() {
     setPaymentModalTitle(title);
     setPaymentModalMessage(message);
     setPaymentModalOpen(true);
-    if (state !== "loading") {
+    if (state !== "loading" && !paymentModalManualCloseEnabled) {
       paymentModalTimeoutRef.current = window.setTimeout(() => {
         setPaymentModalOpen(false);
         paymentModalTimeoutRef.current = null;
       }, blockingModalTimeoutMS);
     }
   };
+
+  const closePaymentModal = useCallback(() => {
+    if (paymentModalTimeoutRef.current !== null) {
+      window.clearTimeout(paymentModalTimeoutRef.current);
+      paymentModalTimeoutRef.current = null;
+    }
+    setPaymentModalOpen(false);
+  }, []);
 
   async function submitDistributedPayment(payload: PaymentRequest) {
     const requestedPaymentID = payload.payment_id.trim();
@@ -386,7 +395,6 @@ function App() {
         `Quorum: ${trace?.ack_count ?? "-"}/${trace?.required_quorum ?? "-"}`,
       ].join("\n");
       showPaymentModal("success", "Payment Accepted", summary);
-      window.setTimeout(() => setPaymentModalOpen(false), 1800);
       void refreshStatus();
       void refreshLedger();
       void refreshEvents();
@@ -401,7 +409,6 @@ function App() {
       const message = getErrorMessage(error);
       setPaymentError(message);
       showPaymentModal("error", "Payment Failed", `Stage 6/6: Failed\n${message}`);
-      window.setTimeout(() => setPaymentModalOpen(false), 1800);
       void refreshStatus();
       void refreshLedger();
       void refreshEvents();
@@ -488,7 +495,9 @@ function App() {
       });
       window.location.assign(out.url);
     } catch (error) {
-      setPaymentError(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setPaymentError(message);
+      showPaymentModal("error", "Payment Service Unavailable", message);
       setPaymentLoading(false);
     }
   }
@@ -679,7 +688,6 @@ function App() {
         "Payment Canceled",
         `Stripe checkout was canceled.\nPayment ID: ${cancelledID || "N/A"}`,
       );
-      window.setTimeout(() => setPaymentModalOpen(false), 1800);
       const cleanURL = `${window.location.origin}/client`;
       window.history.replaceState({}, "", cleanURL);
       return;
@@ -698,12 +706,12 @@ function App() {
           body: JSON.stringify({ session_id: sessionID }),
         });
         setPaymentResult(result);
+        const paidAmount = amountParam && !Number.isNaN(Number(amountParam)) ? `${Number(amountParam).toFixed(2)} ${currencyParam || "USD"}` : "Payment completed";
         showPaymentModal(
           "success",
-          "Payment Accepted",
-          `Stage 6/6: Completed successfully\nPayment ID: ${result.payment_id}\nLeader: ${result.leader_id ?? "-"}\nQuorum: ${result.trace?.ack_count ?? "-"}/${result.trace?.required_quorum ?? "-"}`,
+          "Payment Successful",
+          `${paidAmount}\nPayment ID: ${result.payment_id}`,
         );
-        window.setTimeout(() => setPaymentModalOpen(false), 1800);
         void refreshStatus();
         void refreshLedger();
         void refreshEvents();
@@ -712,7 +720,6 @@ function App() {
       } catch (error) {
         setPaymentError(getErrorMessage(error));
         showPaymentModal("error", "Payment Finalization Failed", getErrorMessage(error));
-        window.setTimeout(() => setPaymentModalOpen(false), 1800);
       } finally {
         setPaymentLoading(false);
       }
@@ -798,7 +805,14 @@ function App() {
 
   return (
     <div className="relative">
-      <PaymentActionModal open={paymentModalOpen} state={paymentModalState} title={paymentModalTitle} message={paymentModalMessage} />
+      <PaymentActionModal
+        open={paymentModalOpen}
+        state={paymentModalState}
+        title={paymentModalTitle}
+        message={paymentModalMessage}
+        canClose={paymentModalManualCloseEnabled}
+        onClose={closePaymentModal}
+      />
       <NodeManagementModal
         open={nodeManagementOpen}
         action={nodeManagementAction}
